@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>NID-Gatecard | E-Toll Card Monitoring System</title>
+    <meta name="description" content="NID-Gatecard - E-Toll Card Monitoring System: Sistem peminjaman dan pengembalian kartu e-Toll kantor cepat dan praktis.">
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#080c16">
+    
+    <!-- Google Font: Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="css/style.css">
+    
+    <!-- Supabase JS Client v2 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <!-- Pustaka Generator QR Code (qrcode.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    
+    <!-- Pustaka Pemindai QR Kamera (html5-qrcode) -->
+    <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+
+    <!-- Header Aplikasi -->
+    <header class="app-header">
+        <div class="header-container">
+            <div class="brand">
+                <div class="brand-icon">💳</div>
+                <div class="brand-text">
+                    <span class="brand-title">NID-Gatecard</span>
+                    <span class="brand-subtitle">E-Toll Card Monitoring System</span>
+                </div>
+            </div>
+
+            <!-- Tombol Login Admin (Saat Belum Login) -->
+            <div id="guest-header-action" style="display: flex; gap: 0.5rem; align-items: center;">
+                <button id="btn-open-admin-login" class="btn btn-secondary btn-sm" type="button">
+                    🔐 Login Admin
+                </button>
+            </div>
+
+            <!-- Info Admin (Saat Sudah Login) -->
+            <div id="auth-header-info" class="user-badge hidden">
+                <span id="user-display-name" style="font-weight: 600; font-size: 0.85rem;">Admin</span>
+                <span id="user-role-badge" class="role-tag admin">Admin Utama</span>
+                <button id="btn-logout" class="btn btn-secondary btn-sm" title="Keluar">Keluar</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigasi Tab Admin (Hanya tampil saat Admin login) -->
+    <nav id="admin-nav" class="nav-tabs hidden">
+        <button class="tab-btn active" data-tab="tab-admin-dashboard">📊 Dashboard</button>
+        <button class="tab-btn" data-tab="tab-admin-borrows">⏳ Persetujuan Pinjam</button>
+        <button class="tab-btn" data-tab="tab-admin-returns">🔍 Verifikasi Kembali</button>
+        <button class="tab-btn" data-tab="tab-admin-cards">💳 Master Kartu</button>
+        <button class="tab-btn" data-tab="tab-admin-history">📋 Riwayat Peminjaman & Pengembalian</button>
+        <button class="tab-btn" data-tab="tab-kiosk-view">📱 Mode Scan / Monitoring Meja</button>
+    </nav>
+
+    <!-- Area Notifikasi Toast / Pesan Alert -->
+    <div id="alert-container" class="main-container" style="padding-bottom: 0;"></div>
+
+    <!-- Kontainer Konten Utama -->
+    <main class="main-container">
+
+        <!-- 1. TAMPILAN KIOSK PEMINJAM (PUBLIK / SIAPA PUN BISA AKSES) -->
+        <section id="kiosk-section">
+            
+            <!-- A. LIVE MONITORING KETERSEDIAAN KARTU (UNTUK DITEMPEL DI MEJA) -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="card-header">
+                    <h2 class="card-title">📊 Status Ketersediaan Kartu e-Toll</h2>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button id="btn-refresh-monitoring" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan Status</button>
+                        <button id="btn-open-desk-qr-modal" class="btn btn-primary btn-sm" type="button">🖨️ Cetak QR Meja</button>
+                    </div>
+                </div>
+                <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">
+                    Pantau ketersediaan kartu secara langsung. Peminjam cukup memindai QR Code di meja untuk melihat kartu mana yang siap digunakan.
+                </p>
+
+                <!-- Grid Kartu Publik -->
+                <div id="public-cards-monitoring-grid" class="monitoring-cards-grid">
+                    <div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                        Memuat data ketersediaan kartu...
+                    </div>
+                </div>
+            </div>
+
+            <!-- B. SCANNER & FORM PINJAM/KEMBALI -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Pindai / Masukkan Kartu e-Toll</h2>
+                </div>
+                <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">
+                    Pindai QR Code pada kartu fisik yang ingin Anda pinjam atau kembalikan, atau ketik kode kartu di bawah.
+                </p>
+
+                <!-- Tombol Scanner & Viewport Kamera -->
+                <div class="scanner-container">
+                    <div id="qr-reader" class="hidden" style="max-width: 420px; margin: 0 auto 1.25rem;"></div>
+                    <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.25rem;">
+                        <button id="btn-start-camera" class="btn btn-primary">
+                            📷 Buka Kamera Pemindai
+                        </button>
+                        <button id="btn-stop-camera" class="btn btn-secondary hidden">
+                            ⏹️ Tutup Kamera
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Input Manual Alternatif -->
+                <div style="max-width: 480px; margin: 0 auto 1.5rem; border-top: 1px dashed var(--border-subtle); padding-top: 1.25rem;">
+                    <label class="form-label" for="input-manual-token">Atau Masukkan Kode Token Kartu Manual:</label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="input-manual-token" class="form-control" placeholder="Contoh: ET-AB12-XY34" style="text-transform: uppercase;">
+                        <button id="btn-check-manual-token" class="btn btn-secondary" style="white-space: nowrap;">Periksa Kartu</button>
+                    </div>
+                </div>
+
+                <!-- Hasil Identifikasi Kartu -->
+                <div id="card-identified-box" class="card hidden" style="background: rgba(30, 41, 59, 0.7); border-left: 4px solid var(--cyan); box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+                        <div>
+                            <h3 id="identified-card-label" style="font-size: 1.15rem; font-weight: 800; color: #ffffff;">-</h3>
+                            <p id="identified-card-number" style="font-size: 0.875rem; color: var(--text-secondary);">-</p>
+                        </div>
+                        <div id="identified-card-badge"></div>
+                    </div>
+
+                    <!-- FORM 1: PINJAM CEPAT (Muncul saat kartu Available - TANPA NOMOR HP) -->
+                    <form id="form-guest-borrow" class="hidden" style="margin-top: 1.25rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+                        <input type="hidden" id="borrow-card-id">
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="borrow-borrower-name">Nama Lengkap Peminjam *</label>
+                                <input type="text" id="borrow-borrower-name" class="form-control" placeholder="Contoh: Budi Santoso" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="borrow-department">Bagian / Divisi *</label>
+                                <input type="text" id="borrow-department" class="form-control" placeholder="Contoh: General Affair / Operasional" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label" for="borrow-date">Tanggal Peminjaman *</label>
+                            <input type="date" id="borrow-date" class="form-control" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label" for="borrow-purpose">Tujuan / Keperluan Dinas *</label>
+                            <textarea id="borrow-purpose" class="form-control" rows="3" placeholder="Contoh: Perjalanan dinas antar dokumen ke cabang Cikarang" required></textarea>
+                        </div>
+
+                        <button type="submit" id="btn-submit-borrow" class="btn btn-primary btn-block">
+                            🚀 Ajukan Peminjaman Kartu
+                        </button>
+                    </form>
+
+                    <!-- FORM 2: PENGEMBALIAN CEPAT (Muncul saat kartu Borrowed - TANPA UPLOAD STRUK) -->
+                    <form id="form-guest-return" class="hidden" style="margin-top: 1.25rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+                        <input type="hidden" id="return-card-id">
+
+                        <div class="alert alert-info" style="margin-bottom: 1.25rem;">
+                            <div>
+                                <strong>Peminjam Saat Ini:</strong> <span id="return-borrower-info">-</span><br>
+                                <strong>Keperluan:</strong> <span id="return-purpose-info">-</span>
+                            </div>
+                        </div>
+
+                        <!-- Peringatan Keterlambatan jika > 3 Hari -->
+                        <div id="return-overdue-alert" class="alert alert-danger hidden" style="margin-bottom: 1.25rem;">
+                            <strong>⚠️ Peringatan Keterlambatan:</strong>
+                            <p id="return-overdue-text">Peminjaman kartu ini telah melewati batas waktu 3 hari.</p>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem;">
+                            <div class="form-group">
+                                <label class="form-label" for="input-return-date">Tanggal Pengembalian *</label>
+                                <input type="date" id="input-return-date" class="form-control" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="input-topup-amount">Nominal Top Up Saldo (Rp) — Opsional</label>
+                                <input type="number" id="input-topup-amount" class="form-control" placeholder="Ketik 0 jika tidak ada top up" min="0" step="1000" value="0">
+                                <small id="topup-amount-formatted" style="color: var(--cyan); font-weight: 600; display: block; margin-top: 0.25rem;"></small>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label" for="input-return-notes">Catatan Pengembalian (Opsional)</label>
+                            <textarea id="input-return-notes" class="form-control" rows="2" placeholder="Contoh: Sisa saldo Rp 125.000, kartu ditaruh kembali di laci GA"></textarea>
+                        </div>
+
+                        <button type="submit" id="btn-submit-return" class="btn btn-primary btn-block">
+                            🔄 Kembalikan Kartu e-Toll
+                        </button>
+                    </form>
+
+                    <!-- Pesan Status Lainnya -->
+                    <div id="card-status-info-box" class="alert hidden" style="margin-top: 1rem;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. TAMPILAN ADMIN UTAMA (HANYA AKTIF SAAT LOGIN) -->
+        <section id="admin-view" class="hidden">
+            
+            <!-- TAB ADMIN 1: DASHBOARD RINGKASAN & NOTIFIKASI KETERLAMBATAN -->
+            <div id="tab-admin-dashboard" class="tab-content">
+                
+                <!-- BANNER NOTIFIKASI KETERLAMBATAN (> 3 HARI) -->
+                <div id="admin-overdue-banner" class="overdue-alert-banner hidden">
+                    <div class="overdue-alert-header">
+                        <span>⚠️ PERINGATAN KETERLAMBATAN PENGEMBALIAN KARTU (&gt; 3 HARI)</span>
+                    </div>
+                    <p style="color: #fecdd3; font-size: 0.9rem;">
+                        Terdapat kartu yang belum dikembalikan melewati batas waktu toleransi kantor (3 hari). Harap tindak lanjuti ke karyawan terkait:
+                    </p>
+                    <div id="overdue-items-container" class="overdue-items-list"></div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-label">Total Kartu Aktif</span>
+                        <span id="stat-total-cards" class="stat-value">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Kartu Tersedia</span>
+                        <span id="stat-available-cards" class="stat-value" style="color: var(--success);">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Sedang Dipinjam</span>
+                        <span id="stat-borrowed-cards" class="stat-value" style="color: var(--info);">0</span>
+                    </div>
+                    <div class="stat-card" style="border-color: rgba(239, 68, 68, 0.4);">
+                        <span class="stat-label" style="color: #f87171;">Belum Kembali &gt; 3 Hari</span>
+                        <span id="stat-overdue-cards" class="stat-value" style="color: #f87171;">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Menunggu Persetujuan</span>
+                        <span id="stat-pending-approval" class="stat-value" style="color: var(--warning);">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Verifikasi Pengembalian</span>
+                        <span id="stat-pending-returns" class="stat-value" style="color: #c084fc;">0</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Ringkasan Sistem NID-Gatecard</h2>
+                        <button id="btn-refresh-admin-dashboard" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan Data</button>
+                    </div>
+                    <p style="color: var(--text-secondary);">
+                        Panel kendali Admin Utama aktif. Gunakan tab <strong>Riwayat Peminjaman &amp; Pengembalian</strong> untuk memantau seluruh transaksi kantor, mencari peminjam, atau mengunduh laporan Excel/CSV.
+                    </p>
+                </div>
+            </div>
+
+            <!-- TAB ADMIN 2: PERSETUJUAN PINJAM -->
+            <div id="tab-admin-borrows" class="tab-content hidden">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Permohonan Peminjaman Menunggu Persetujuan</h2>
+                        <button id="btn-refresh-admin-borrows" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Waktu Pengajuan</th>
+                                    <th>Peminjam &amp; Divisi</th>
+                                    <th>Kartu e-Toll</th>
+                                    <th>Tanggal Pinjam</th>
+                                    <th>Keperluan</th>
+                                    <th>Aksi Keputusan</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-borrows-tbody">
+                                <tr>
+                                    <td colspan="6" style="text-align: center; color: var(--text-muted);">Memuat data permohonan...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB ADMIN 3: VERIFIKASI PENGEMBALIAN (TANPA STRUK) -->
+            <div id="tab-admin-returns" class="tab-content hidden">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Verifikasi Pengembalian Kartu</h2>
+                        <button id="btn-refresh-admin-returns" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Waktu Pengajuan</th>
+                                    <th>Peminjam &amp; Divisi</th>
+                                    <th>Kartu e-Toll</th>
+                                    <th>Tanggal Top Up / Kembali</th>
+                                    <th>Nominal Top Up</th>
+                                    <th>Catatan Pengembalian</th>
+                                    <th>Aksi Verifikasi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-returns-tbody">
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-muted);">Memuat pengembalian...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB ADMIN 4: MASTER KARTU -->
+            <div id="tab-admin-cards" class="tab-content hidden">
+                <!-- Form Tambah Kartu -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">➕ Tambah Kartu e-Toll Baru</h2>
+                    </div>
+                    <form id="form-create-card" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) 140px; gap: 1rem; align-items: flex-end;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label class="form-label" for="new-card-label">Label / Nama Kartu</label>
+                            <input type="text" id="new-card-label" class="form-control" placeholder="Contoh: Mandiri e-Toll Operasional 01" required>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label class="form-label" for="new-card-identifier">Nomor Fisik Kartu</label>
+                            <input type="text" id="new-card-identifier" class="form-control" placeholder="Contoh: 6032 9876 5432 1098" required>
+                        </div>
+                        <button type="submit" id="btn-submit-create-card" class="btn btn-primary">
+                            Simpan Kartu
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Daftar Kartu yang Terdaftar -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Daftar Master Kartu</h2>
+                        <button id="btn-refresh-admin-cards" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Label Kartu</th>
+                                    <th>Nomor Fisik</th>
+                                    <th>Status</th>
+                                    <th>Token QR</th>
+                                    <th>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-cards-tbody">
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: var(--text-muted);">Memuat kartu...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB ADMIN 5: RIWAYAT PEMINJAMAN & PENGEMBALIAN (PENGGANTI LOG AUDIT) -->
+            <div id="tab-admin-history" class="tab-content hidden">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">📋 Riwayat Peminjaman &amp; Pengembalian</h2>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button id="btn-refresh-admin-history" class="btn btn-secondary btn-sm" type="button">🔄 Segarkan</button>
+                            <button id="btn-export-history-csv" class="btn btn-success btn-sm" type="button">📥 Ekspor CSV</button>
+                        </div>
+                    </div>
+
+                    <!-- Filter & Search Bar -->
+                    <div class="filter-search-bar">
+                        <div class="filter-search-input">
+                            <input type="text" id="input-history-search" class="form-control" placeholder="Cari peminjam, divisi, atau kartu..." style="min-height: 40px; padding: 0.5rem 0.85rem;">
+                        </div>
+                        <div>
+                            <select id="select-history-status" class="form-control" style="min-height: 40px; padding: 0.5rem 0.85rem;">
+                                <option value="all">Semua Status Transaksi</option>
+                                <option value="borrowed">Sedang Dipinjam</option>
+                                <option value="overdue">⚠️ Belum Kembali (&gt; 3 Hari)</option>
+                                <option value="completed">Selesai (Sudah Kembali)</option>
+                                <option value="pending_approval">Menunggu Persetujuan</option>
+                                <option value="pending_return_review">Menunggu Verifikasi</option>
+                                <option value="rejected">Ditolak</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Waktu &amp; Tanggal Pinjam</th>
+                                    <th>Peminjam &amp; Divisi</th>
+                                    <th>Kartu e-Toll</th>
+                                    <th>Keperluan</th>
+                                    <th>Status</th>
+                                    <th>Detail Pengembalian</th>
+                                    <th>Catatan Admin</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-history-tbody">
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-muted);">Memuat riwayat transaksi...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- MODAL KHUSUS LOGIN ADMIN -->
+    <div id="modal-admin-login" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="auth-header">
+                <h1 style="font-size: 1.4rem;">Login Admin Utama</h1>
+                <p style="color: var(--cyan); font-size: 0.8rem; margin-top: 0.25rem;">NID-Gatecard Control Panel</p>
+            </div>
+
+            <form id="form-admin-login">
+                <div class="form-group">
+                    <label class="form-label" for="login-email">Alamat Email Admin</label>
+                    <input type="email" id="login-email" class="form-control" placeholder="admin@kantor.com" required autocomplete="email">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="login-password">Kata Sandi</label>
+                    <input type="password" id="login-password" class="form-control" placeholder="Kata sandi admin" required autocomplete="current-password">
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem;">
+                    <button type="button" id="btn-close-admin-login" class="btn btn-secondary">Batal</button>
+                    <button type="submit" id="btn-submit-admin-login" class="btn btn-primary">Masuk</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL CETAK QR CODE KARTU FISIK -->
+    <div id="modal-qr" class="modal-overlay hidden">
+        <div class="modal-content" style="text-align: center;">
+            <h3 id="modal-qr-title" style="margin-bottom: 0.25rem;">QR Code Kartu</h3>
+            <p id="modal-qr-subtitle" style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.75rem;">-</p>
+
+            <div style="margin-bottom: 1rem; text-align: left; background: rgba(15, 23, 42, 0.75); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <label class="form-label" for="qr-base-url-input" style="font-size: 0.8rem; margin-bottom: 0.25rem;">Alamat Server QR:</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="qr-base-url-input" class="form-control" style="font-size: 0.85rem; padding: 0.4rem 0.6rem; min-height: 36px;">
+                    <button id="btn-update-qr-url" class="btn btn-secondary btn-sm" type="button">Terapkan</button>
+                </div>
+                <small style="color: var(--text-secondary); font-size: 0.75rem; display: block; margin-top: 0.35rem;">
+                    💡 Domain: Diisi otomatis sesuai URL website saat ini
+                </small>
+            </div>
+            
+            <div id="modal-qr-canvas-wrapper" style="display: flex; justify-content: center; margin-bottom: 1rem; padding: 0.75rem; background: #fff; border-radius: var(--radius-sm); box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);"></div>
+            
+            <p id="modal-qr-token-text" style="font-family: monospace; font-weight: 700; background: rgba(15, 23, 42, 0.85); color: var(--cyan); border: 1px solid var(--border-subtle); padding: 0.5rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem;">-</p>
+
+            <div style="display: flex; gap: 0.5rem; justify-content: center;">
+                <button id="btn-print-qr" class="btn btn-primary">🖨️ Cetak QR Kartu</button>
+                <button id="btn-close-qr-modal" class="btn btn-secondary">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL CETAK QR CODE MEJA (UNTUK MONITORING KARYAWAN) -->
+    <div id="modal-desk-qr" class="modal-overlay hidden">
+        <div class="modal-content" style="text-align: center; max-width: 460px;">
+            <div class="auth-header" style="margin-bottom: 1rem;">
+                <h2 style="font-size: 1.3rem;">QR Code Meja Kantor</h2>
+                <p style="color: var(--cyan); font-size: 0.85rem; margin-top: 0.25rem;">Monitoring Ketersediaan Kartu e-Toll</p>
+            </div>
+
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;">
+                Cetak dan tempelkan QR Code ini di meja GA / resepsionis agar karyawan dapat langsung memindai dengan HP untuk mengecek kartu mana yang tersedia.
+            </p>
+
+            <div id="desk-qr-canvas-wrapper" style="display: flex; justify-content: center; margin-bottom: 1rem; padding: 1rem; background: #fff; border-radius: var(--radius-sm); box-shadow: 0 0 25px rgba(255, 255, 255, 0.2);"></div>
+
+            <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid var(--border-subtle); padding: 0.75rem; border-radius: var(--radius-sm); margin-bottom: 1.25rem; font-size: 0.85rem;">
+                <span style="color: var(--text-muted); display: block; font-size: 0.75rem;">Tautan Tujuan QR:</span>
+                <strong id="desk-qr-url-text" style="color: #ffffff; word-break: break-all;">-</strong>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem; justify-content: center;">
+                <button id="btn-print-desk-qr" class="btn btn-primary">🖨️ Cetak QR Meja</button>
+                <button id="btn-close-desk-qr" class="btn btn-secondary">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL KEPUTUSAN ADMIN (SETUJU / TOLAK) -->
+    <div id="modal-decision" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 id="modal-decision-title">Konfirmasi Keputusan</h3>
+            <p id="modal-decision-desc" style="color: var(--text-secondary); font-size: 0.875rem; margin: 0.5rem 0 1rem;">-</p>
+
+            <form id="form-decision">
+                <input type="hidden" id="decision-tx-id">
+                <input type="hidden" id="decision-action-type">
+
+                <div class="form-group">
+                    <label class="form-label" for="decision-note" id="label-decision-note">Catatan Keputusan</label>
+                    <textarea id="decision-note" class="form-control" rows="3" placeholder="Tambahkan catatan jika diperlukan..."></textarea>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                    <button type="button" id="btn-cancel-decision" class="btn btn-secondary">Batal</button>
+                    <button type="submit" id="btn-confirm-decision" class="btn btn-primary">Konfirmasi</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Skrip Utama Aplikasi -->
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
