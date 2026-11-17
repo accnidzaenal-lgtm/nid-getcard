@@ -6,7 +6,7 @@ import { getClient } from './supabaseClient.js';
 /**
  * Mengajukan permohonan peminjaman kartu tanpa perlu login akun & tanpa nomor HP
  */
-export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartment, purpose, borrowDate }) {
+export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartment, purpose, borrowDate, honeypot }) {
     const supabase = getClient();
     if (!supabase) throw new Error("Koneksi Supabase tidak aktif.");
 
@@ -21,7 +21,8 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
         p_borrower_department: borrowerDepartment.trim(),
         p_purpose: purpose.trim(),
         p_borrower_phone: null, // Nomor HP dihilangkan sesuai permintaan
-        p_borrow_date: borrowDate || new Date().toISOString().split('T')[0]
+        p_borrow_date: borrowDate || new Date().toISOString().split('T')[0],
+        p_honeypot: honeypot ? honeypot.trim() : null
     });
 
     if (error) {

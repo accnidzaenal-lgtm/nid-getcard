@@ -324,16 +324,11 @@ async function refreshPublicMonitoring() {
             if (c.status === 'available') {
                 cardClass += ' available';
                 statusText = '<span class="status-badge status-available">🟢 Tersedia</span>';
-                actionBtn = `<button class="btn btn-primary btn-sm btn-quick-select-card" data-token="${c.qr_token}" style="margin-top: 0.5rem; width: 100%;">🚀 Pinjam Kartu Ini</button>`;
+                actionBtn = `<button class="btn btn-primary btn-sm btn-quick-select-card" data-id="${c.id}" data-label="${c.label}" data-status="available" style="margin-top: 0.5rem; width: 100%;">🚀 Pinjam Kartu Ini</button>`;
             } else if (c.status === 'borrowed') {
-                if (c.isOverdue) {
-                    cardClass += ' overdue';
-                    statusText = `<span class="status-badge status-overdue">⚠️ Telat (${c.diffDays} Hari)</span>`;
-                } else {
-                    cardClass += ' borrowed';
-                    statusText = '<span class="status-badge status-borrowed">🔵 Sedang Dipinjam</span>';
-                }
-                actionBtn = `<button class="btn btn-secondary btn-sm btn-quick-select-card" data-token="${c.qr_token}" style="margin-top: 0.5rem; width: 100%;">🔄 Kembalikan Kartu</button>`;
+                cardClass += ' borrowed';
+                statusText = '<span class="status-badge status-borrowed">🔵 Sedang Dipinjam</span>';
+                actionBtn = `<button class="btn btn-secondary btn-sm btn-quick-select-card" data-id="${c.id}" data-label="${c.label}" data-status="borrowed" style="margin-top: 0.5rem; width: 100%;">🔄 Kembalikan Kartu</button>`;
             } else if (c.status === 'pending_approval') {
                 statusText = '<span class="status-badge status-pending_approval">⏳ Menunggu Persetujuan</span>';
             } else if (c.status === 'pending_return_review') {
@@ -348,18 +343,15 @@ async function refreshPublicMonitoring() {
                         <div class="monitor-card-header">
                             <div>
                                 <div class="monitor-card-title">${c.label}</div>
-                                <div class="monitor-card-num">${c.card_identifier}</div>
                             </div>
                             <div>${statusText}</div>
                         </div>
                         <div class="monitor-card-body">
-                            ${c.status === 'borrowed' ? `
-                                <div style="font-size: 0.85rem; background: rgba(15, 23, 42, 0.6); padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-subtle);">
-                                    <strong style="color: #ffffff;">Peminjam:</strong> ${c.activeBorrower || '-'} (${c.activeDepartment || 'Divisi'})<br>
-                                    <strong style="color: #ffffff;">Dipinjam Sejak:</strong> ${formatDateOnly(c.activeBorrowDate)}
-                                    ${c.isOverdue ? `<br><span style="color: #f87171; font-weight: 700;">⚠️ Melebihi 3 hari (${c.diffDays} hari)</span>` : ''}
-                                </div>
-                            ` : (c.status === 'available' ? '<p style="color: #34d399; font-size: 0.85rem;">Siap digunakan untuk keperluan dinas kantor.</p>' : '<p style="color: var(--text-muted); font-size: 0.85rem;">Sedang diproses.</p>')}
+                            ${c.status === 'available' 
+                                ? '<p style="color: #34d399; font-size: 0.85rem; margin: 0;">Kartu tersedia di kantor dan siap digunakan.</p>' 
+                                : (c.status === 'borrowed' 
+                                    ? '<p style="color: var(--cyan); font-size: 0.85rem; margin: 0;">Kartu sedang dipinjam untuk dinas operasional.</p>' 
+                                    : '<p style="color: var(--text-muted); font-size: 0.85rem; margin: 0;">Sedang dalam proses verifikasi admin.</p>')}
                         </div>
                     </div>
                     ${actionBtn}
@@ -370,9 +362,32 @@ async function refreshPublicMonitoring() {
         // Pasang event tombol cepat pinjam/kembalikan
         publicCardsMonitoringGridEl.querySelectorAll('.btn-quick-select-card').forEach(b => {
             b.addEventListener('click', () => {
-                inputManualTokenEl.value = b.dataset.token;
-                handleIdentifyCard(b.dataset.token);
-                // Scroll ke form identifikasi
+                const cardId = b.dataset.id;
+                const cardLabel = b.dataset.label;
+                const cardStatus = b.dataset.status;
+
+                currentIdentifiedCard = { id: cardId, label: cardLabel, status: cardStatus };
+                identifiedCardLabelEl.textContent = cardLabel;
+                identifiedCardNumberEl.textContent = '';
+                identifiedCardBadgeEl.innerHTML = renderStatusBadge(cardStatus);
+                cardIdentifiedBoxEl.classList.remove('hidden');
+
+                formGuestBorrowEl.classList.add('hidden');
+                formGuestReturnEl.classList.add('hidden');
+                cardStatusInfoBoxEl.classList.add('hidden');
+                if (returnOverdueAlertEl) returnOverdueAlertEl.classList.add('hidden');
+
+                if (cardStatus === 'available') {
+                    formGuestBorrowEl.classList.remove('hidden');
+                    borrowCardIdEl.value = cardId;
+                    borrowDateEl.value = new Date().toISOString().split('T')[0];
+                    borrowBorrowerNameEl.focus();
+                } else if (cardStatus === 'borrowed') {
+                    formGuestReturnEl.classList.remove('hidden');
+                    returnCardIdEl.value = cardId;
+                    inputReturnDateEl.value = new Date().toISOString().split('T')[0];
+                }
+
                 cardIdentifiedBoxEl.scrollIntoView({ behavior: 'smooth' });
             });
         });
@@ -417,24 +432,10 @@ async function handleIdentifyCard(token) {
             borrowDateEl.value = new Date().toISOString().split('T')[0];
             borrowBorrowerNameEl.focus();
         } else if (card.status === 'borrowed') {
-            const activeBorrow = await getActiveBorrowInfoByCardId(card.id);
             formGuestReturnEl.classList.remove('hidden');
             returnCardIdEl.value = card.id;
             inputReturnDateEl.value = new Date().toISOString().split('T')[0];
-
-            if (activeBorrow) {
-                returnBorrowerInfoEl.textContent = `${activeBorrow.borrower_name} (${activeBorrow.borrower_department || 'Divisi'}) - Dipinjam: ${formatDateOnly(activeBorrow.borrow_date)}`;
-                returnPurposeInfoEl.textContent = activeBorrow.purpose || '-';
-
-                // Cek keterlambatan (> 3 hari)
-                const today = new Date();
-                const bDate = new Date(activeBorrow.borrow_date);
-                const diffDays = Math.floor((today - bDate) / (1000 * 60 * 60 * 24));
-                if (diffDays > 3) {
-                    returnOverdueAlertEl.classList.remove('hidden');
-                    returnOverdueTextEl.textContent = `Peminjaman kartu ini telah berjalan selama ${diffDays} hari (melebihi batas toleransi kantor 3 hari). Harap segera selesaikan pengembalian.`;
-                }
-            }
+            if (returnOverdueAlertEl) returnOverdueAlertEl.classList.add('hidden');
         } else if (card.status === 'pending_approval') {
             cardStatusInfoBoxEl.className = 'alert alert-warning';
             cardStatusInfoBoxEl.innerHTML = '<strong>⏳ Menunggu Persetujuan:</strong> Permohonan peminjaman untuk kartu ini sedang menunggu konfirmasi Admin.';
@@ -1016,7 +1017,7 @@ async function initApp() {
         handleIdentifyCard(token);
     });
 
-    // 7. Form Peminjaman Cepat (Tanpa Nomor HP)
+    // 7. Form Peminjaman Cepat (Tanpa Nomor HP, Dilindungi Honeypot)
     formGuestBorrowEl.addEventListener('submit', async (e) => {
         e.preventDefault();
         const cardId = borrowCardIdEl.value;
@@ -1024,6 +1025,7 @@ async function initApp() {
         const borrowerDepartment = borrowDepartmentEl.value;
         const borrowDate = borrowDateEl.value;
         const purpose = borrowPurposeEl.value;
+        const honeypotVal = document.getElementById('borrow-honeypot')?.value || null;
 
         btnSubmitBorrowEl.disabled = true;
         btnSubmitBorrowEl.textContent = 'Mengirim Permohonan...';
@@ -1034,7 +1036,8 @@ async function initApp() {
                 borrowerName,
                 borrowerDepartment,
                 purpose,
-                borrowDate
+                borrowDate,
+                honeypot: honeypotVal
             });
 
             showAlert(`Permohonan peminjaman atas nama ${borrowerName} (${borrowerDepartment}) berhasil diajukan! Menunggu persetujuan Admin.`, "success", 7000);

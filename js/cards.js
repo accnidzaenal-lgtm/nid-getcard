@@ -24,57 +24,36 @@ export async function fetchAllCards() {
 }
 
 /**
- * Mengambil status ketersediaan kartu beserta peminjam aktifnya untuk dashboard publik
+ * Mengambil status ketersediaan kartu untuk dashboard publik (Murni dari VIEW publik)
+ * Mengutamakan privasi: TIDAK MEMUAT nama peminjam, divisi, keperluan, atau tanggal pinjam
  */
 export async function fetchPublicCardsMonitoring() {
     const supabase = getClient();
     if (!supabase) return [];
 
     try {
+        // Coba ambil dari VIEW publik yang dilindungi
+        const { data: viewData, error: viewErr } = await supabase
+            .from('cards_public_view')
+            .select('id, label, status, status_display')
+            .order('label', { ascending: true });
+
+        if (!viewErr && viewData) {
+            return viewData;
+        }
+
+        // Fallback jika view belum dibuat di DB: ambil hanya label & status
         const { data: cards, error: cardErr } = await supabase
             .from('cards')
-            .select('*')
+            .select('id, label, status')
             .order('label', { ascending: true });
 
         if (cardErr) throw cardErr;
 
-        // Ambil transaksi aktif (borrowed) untuk kartu-kartu yang sedang dipinjam
-        const { data: activeTx, error: txErr } = await supabase
-            .from('transactions')
-            .select('card_id, borrower_name, borrower_department, borrow_date, purpose, status')
-            .in('status', ['borrowed', 'pending_approval', 'pending_return_review']);
-
-        const txMap = {};
-        if (activeTx) {
-            activeTx.forEach(tx => {
-                txMap[tx.card_id] = tx;
-            });
-        }
-
-        const today = new Date();
-        return (cards || []).map(card => {
-            const tx = txMap[card.id];
-            let isOverdue = false;
-            let diffDays = 0;
-
-            if (tx && tx.status === 'borrowed') {
-                const bDate = new Date(tx.borrow_date);
-                diffDays = Math.floor((today - bDate) / (1000 * 60 * 60 * 24));
-                if (diffDays > 3) {
-                    isOverdue = true;
-                }
-            }
-
-            return {
-                ...card,
-                activeBorrower: tx ? tx.borrower_name : null,
-                activeDepartment: tx ? tx.borrower_department : null,
-                activeBorrowDate: tx ? tx.borrow_date : null,
-                activePurpose: tx ? tx.purpose : null,
-                isOverdue,
-                diffDays
-            };
-        });
+        return (cards || []).map(c => ({
+            ...c,
+            status_display: c.status === 'available' ? 'Tersedia' : (c.status === 'borrowed' ? 'Dipinjam' : 'Menunggu')
+        }));
     } catch (err) {
         console.error("Gagal memuat monitoring kartu:", err);
         return [];
@@ -83,12 +62,28 @@ export async function fetchPublicCardsMonitoring() {
 
 /**
  * Mengambil detail satu kartu berdasarkan qr_token
+ * Menggunakan RPC get_card_by_token yang aman untuk anon
  */
 export async function getCardByToken(token) {
     const supabase = getClient();
     if (!supabase) return null;
 
     const cleanToken = token.trim();
+
+    try {
+        // 1. Coba melalui RPC get_card_by_token (Aman untuk role anon)
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('get_card_by_token', {
+            p_token: cleanToken
+        });
+
+        if (!rpcErr && rpcData && rpcData.length > 0) {
+            return rpcData[0];
+        }
+    } catch (e) {
+        // Abaikan jika RPC belum terpasang, lanjut ke fallback
+    }
+
+    // 2. Fallback direct select (berjalan jika admin sudah login)
     const { data, error } = await supabase
         .from('cards')
         .select('*')
