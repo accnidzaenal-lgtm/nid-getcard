@@ -3,8 +3,17 @@
 // ==============================================================================
 import { getClient } from './supabaseClient.js';
 
+export function normalizeTitleCase(str) {
+    if (!str) return '';
+    return str
+        .trim()
+        .toLowerCase()
+        .replace(/(?:^|\s|-)\S/g, char => char.toUpperCase());
+}
+
 /**
  * Mengajukan permohonan peminjaman kartu tanpa perlu login akun & tanpa nomor HP
+ * Nama peminjam dinormalisasi otomatis (Title Case)
  */
 export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartment, purpose, borrowDate, honeypot }) {
     const supabase = getClient();
@@ -15,12 +24,14 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
     if (!borrowerDepartment || borrowerDepartment.trim() === '') throw new Error("Bagian / Divisi wajib diisi.");
     if (!purpose || purpose.trim() === '') throw new Error("Tujuan / Keperluan dinas wajib diisi.");
 
+    const cleanName = normalizeTitleCase(borrowerName);
+
     const { data, error } = await supabase.rpc('submit_guest_borrow', {
         p_card_id: cardId,
-        p_borrower_name: borrowerName.trim(),
+        p_borrower_name: cleanName,
         p_borrower_department: borrowerDepartment.trim(),
         p_purpose: purpose.trim(),
-        p_borrower_phone: null, // Nomor HP dihilangkan sesuai permintaan
+        p_borrower_phone: null, // Tanpa nomor HP & Tanpa NIK
         p_borrow_date: borrowDate || new Date().toISOString().split('T')[0],
         p_honeypot: honeypot ? honeypot.trim() : null
     });

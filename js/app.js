@@ -2,7 +2,7 @@
 // NID-GATECARD - PENGATUR ALUR APLIKASI UTAMA (app.js)
 // ==============================================================================
 import { isConfigured } from './config.js';
-import { initSupabase } from './supabaseClient.js';
+import { initSupabase, getClient } from './supabaseClient.js';
 import { 
     loginUser, 
     logoutUser, 
@@ -25,7 +25,7 @@ import {
     submitGuestBorrow 
 } from './borrow.js';
 import { 
-    getActiveBorrowInfoByCardId, 
+    getActiveCardBalance, 
     submitGuestReturn 
 } from './return.js';
 import { 
@@ -34,14 +34,20 @@ import {
     decideBorrow, 
     fetchPendingReturns, 
     decideReturn, 
-    fetchAllTransactionHistory 
+    fetchAllTransactionHistory,
+    getReceiptSignedUrl,
+    fetchDepartments
 } from './admin.js';
 
 // Status Global Aplikasi
 let currentUserProfile = null;
 let currentIdentifiedCard = null;
 let decisionTargetCategory = 'borrow'; // 'borrow' atau 'return'
+let currentDecisionPemakaian = 0;
+let currentDecisionSaldoAwal = 300000;
 let allHistoryCache = [];
+let realtimeChannel = null;
+let pollingIntervalId = null;
 
 // Elemen DOM Header & Auth
 const guestHeaderActionEl = document.getElementById('guest-header-action');
@@ -50,6 +56,7 @@ const authHeaderInfoEl = document.getElementById('auth-header-info');
 const userDisplayNameEl = document.getElementById('user-display-name');
 const btnLogoutEl = document.getElementById('btn-logout');
 const adminNavEl = document.getElementById('admin-nav');
+const badgeTotalVerifikasiEl = document.getElementById('badge-total-verifikasi');
 const alertContainerEl = document.getElementById('alert-container');
 
 // Elemen Tampilan Kiosk (Peminjam)
@@ -78,19 +85,23 @@ const borrowDateEl = document.getElementById('borrow-date');
 const borrowPurposeEl = document.getElementById('borrow-purpose');
 const btnSubmitBorrowEl = document.getElementById('btn-submit-borrow');
 
-// Form Kembali Cepat (Guest - Tanpa Struk)
+// Form Kembali Cepat (Guest - Skema Saldo)
 const formGuestReturnEl = document.getElementById('form-guest-return');
 const returnCardIdEl = document.getElementById('return-card-id');
-const returnBorrowerInfoEl = document.getElementById('return-borrower-info');
-const returnPurposeInfoEl = document.getElementById('return-purpose-info');
+const displayReturnSaldoAwalEl = document.getElementById('display-return-saldo-awal');
 const returnOverdueAlertEl = document.getElementById('return-overdue-alert');
 const returnOverdueTextEl = document.getElementById('return-overdue-text');
 const inputReturnDateEl = document.getElementById('input-return-date');
+const inputUsageAmountEl = document.getElementById('input-usage-amount');
+const usageAmountFormattedEl = document.getElementById('usage-amount-formatted');
 const inputTopupAmountEl = document.getElementById('input-topup-amount');
 const topupAmountFormattedEl = document.getElementById('topup-amount-formatted');
+const inputReceiptFileEl = document.getElementById('input-receipt-file');
 const inputReturnNotesEl = document.getElementById('input-return-notes');
 const btnSubmitReturnEl = document.getElementById('btn-submit-return');
 const cardStatusInfoBoxEl = document.getElementById('card-status-info-box');
+
+let currentActiveCardSaldoAwal = 300000;
 
 // Elemen Tampilan Admin Dashboard & Overdue
 const adminViewEl = document.getElementById('admin-view');
@@ -102,26 +113,38 @@ const statBorrowedCardsEl = document.getElementById('stat-borrowed-cards');
 const statOverdueCardsEl = document.getElementById('stat-overdue-cards');
 const statPendingApprovalEl = document.getElementById('stat-pending-approval');
 const statPendingReturnsEl = document.getElementById('stat-pending-returns');
+const cardStatPendingApprovalEl = document.getElementById('card-stat-pending-approval');
+const cardStatPendingReturnsEl = document.getElementById('card-stat-pending-returns');
 const btnRefreshAdminDashboardEl = document.getElementById('btn-refresh-admin-dashboard');
 
+// Elemen Tab Admin Verifikasi (Gabungan Peminjaman & Pengembalian)
+const btnSubtabBorrowsEl = document.getElementById('btn-subtab-borrows');
+const btnSubtabReturnsEl = document.getElementById('btn-subtab-returns');
+const badgeSubtabBorrowsEl = document.getElementById('badge-subtab-borrows');
+const badgeSubtabReturnsEl = document.getElementById('badge-subtab-returns');
+const subtabContentBorrowsEl = document.getElementById('subtab-content-borrows');
+const subtabContentReturnsEl = document.getElementById('subtab-content-returns');
+const realtimeStatusIndicatorEl = document.getElementById('realtime-status-indicator');
+
 const adminBorrowsTbodyEl = document.getElementById('admin-borrows-tbody');
-const btnRefreshAdminBorrowsEl = document.getElementById('btn-refresh-admin-borrows');
-
 const adminReturnsTbodyEl = document.getElementById('admin-returns-tbody');
-const btnRefreshAdminReturnsEl = document.getElementById('btn-refresh-admin-returns');
 
+// Elemen Tab Master Kartu
 const formCreateCardEl = document.getElementById('form-create-card');
 const newCardLabelEl = document.getElementById('new-card-label');
 const newCardIdentifierEl = document.getElementById('new-card-identifier');
 const adminCardsTbodyEl = document.getElementById('admin-cards-tbody');
 const btnRefreshAdminCardsEl = document.getElementById('btn-refresh-admin-cards');
 
-// Elemen Tab Riwayat Peminjaman & Pengembalian (Baru)
+// Elemen Tab Riwayat
 const adminHistoryTbodyEl = document.getElementById('admin-history-tbody');
 const btnRefreshAdminHistoryEl = document.getElementById('btn-refresh-admin-history');
 const btnExportHistoryCsvEl = document.getElementById('btn-export-history-csv');
 const inputHistorySearchEl = document.getElementById('input-history-search');
 const selectHistoryStatusEl = document.getElementById('select-history-status');
+const historyTotalUsageEl = document.getElementById('history-total-usage');
+const historyTotalTopupEl = document.getElementById('history-total-topup');
+const historyTotalCountEl = document.getElementById('history-total-count');
 
 // Modal Admin Login
 const modalAdminLoginEl = document.getElementById('modal-admin-login');
@@ -143,7 +166,7 @@ const btnPrintQrEl = document.getElementById('btn-print-qr');
 const btnCloseQrModalEl = document.getElementById('btn-close-qr-modal');
 let currentQrTokenForModal = '';
 
-// Modal QR Meja (Monitoring Karyawan)
+// Modal QR Monitoring (Monitoring Karyawan)
 const modalDeskQrEl = document.getElementById('modal-desk-qr');
 const deskQrCanvasWrapperEl = document.getElementById('desk-qr-canvas-wrapper');
 const deskQrUrlTextEl = document.getElementById('desk-qr-url-text');
@@ -160,6 +183,12 @@ const decisionActionTypeEl = document.getElementById('decision-action-type');
 const decisionNoteEl = document.getElementById('decision-note');
 const labelDecisionNoteEl = document.getElementById('label-decision-note');
 const btnCancelDecisionEl = document.getElementById('btn-cancel-decision');
+
+const decisionCorrectionBoxEl = document.getElementById('decision-correction-box');
+const decisionPemakaianTextEl = document.getElementById('decision-pemakaian-text');
+const decisionSaldoAwalTextEl = document.getElementById('decision-saldo-awal-text');
+const decisionCorrectedTopupEl = document.getElementById('decision-corrected-topup');
+const decisionCorrectionNoteHintEl = document.getElementById('decision-correction-note-hint');
 
 /**
  * Menampilkan pesan notifikasi
@@ -238,6 +267,7 @@ async function updateUIForUser(profile) {
         adminNavEl.classList.add('hidden');
         adminViewEl.classList.add('hidden');
         kioskSectionEl.classList.remove('hidden');
+        teardownRealtimeSubscriptions();
         await refreshPublicMonitoring();
         return;
     }
@@ -258,10 +288,12 @@ async function updateUIForUser(profile) {
     await refreshAdminReturns();
     await refreshAdminCards();
     await refreshAdminHistory();
+
+    setupRealtimeSubscriptions();
 }
 
 /**
- * Tab switcher untuk Admin
+ * Tab switcher untuk Admin (5 Menu Utama)
  */
 function setupAdminTabs() {
     if (!adminNavEl) return;
@@ -293,16 +325,151 @@ function setupAdminTabs() {
             });
 
             if (targetTabId === 'tab-admin-dashboard') refreshAdminDashboard();
-            if (targetTabId === 'tab-admin-borrows') refreshAdminBorrows();
-            if (targetTabId === 'tab-admin-returns') refreshAdminReturns();
+            if (targetTabId === 'tab-admin-verification') {
+                refreshAdminBorrows();
+                refreshAdminReturns();
+            }
             if (targetTabId === 'tab-admin-cards') refreshAdminCards();
             if (targetTabId === 'tab-admin-history') refreshAdminHistory();
         });
     });
 }
 
+/**
+ * Sub-nav switcher dalam Menu Verifikasi (Peminjaman & Pengembalian)
+ */
+function setupVerificationSubtabs() {
+    if (btnSubtabBorrowsEl) {
+        btnSubtabBorrowsEl.addEventListener('click', () => {
+            btnSubtabBorrowsEl.classList.add('active');
+            btnSubtabReturnsEl.classList.remove('active');
+            subtabContentBorrowsEl.classList.remove('hidden');
+            subtabContentReturnsEl.classList.add('hidden');
+        });
+    }
+
+    if (btnSubtabReturnsEl) {
+        btnSubtabReturnsEl.addEventListener('click', () => {
+            btnSubtabReturnsEl.classList.add('active');
+            btnSubtabBorrowsEl.classList.remove('active');
+            subtabContentReturnsEl.classList.remove('hidden');
+            subtabContentBorrowsEl.classList.add('hidden');
+        });
+    }
+
+    // Klik kartu dashboard untuk langsung menuju subtab Verifikasi
+    if (cardStatPendingApprovalEl) {
+        cardStatPendingApprovalEl.addEventListener('click', () => {
+            const navVerif = document.getElementById('nav-btn-verification');
+            if (navVerif) navVerif.click();
+            if (btnSubtabBorrowsEl) btnSubtabBorrowsEl.click();
+        });
+    }
+
+    if (cardStatPendingReturnsEl) {
+        cardStatPendingReturnsEl.addEventListener('click', () => {
+            const navVerif = document.getElementById('nav-btn-verification');
+            if (navVerif) navVerif.click();
+            if (btnSubtabReturnsEl) btnSubtabReturnsEl.click();
+        });
+    }
+}
+
+/**
+ * Realtime Subscription untuk Admin (postgres_changes pada transactions & returns)
+ * Fallback polling 30 detik
+ */
+function setupRealtimeSubscriptions() {
+    teardownRealtimeSubscriptions();
+
+    const supabase = getClient();
+    if (!supabase || !currentUserProfile) return;
+
+    try {
+        realtimeChannel = supabase
+            .channel('admin-verification-channel')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+                handleRealtimeUpdate('transactions');
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'returns' }, (payload) => {
+                handleRealtimeUpdate('returns');
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, (payload) => {
+                handleRealtimeUpdate('cards');
+            })
+            .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    setRealtimeStatus(true);
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                    setRealtimeStatus(false);
+                }
+            });
+    } catch (err) {
+        console.warn("Gagal inisialisasi Supabase Realtime:", err);
+        setRealtimeStatus(false);
+    }
+
+    // Fallback polling setiap 30 detik
+    pollingIntervalId = setInterval(() => {
+        if (currentUserProfile && currentUserProfile.role === 'admin') {
+            handleRealtimeUpdate('polling');
+        }
+    }, 30000);
+}
+
+function teardownRealtimeSubscriptions() {
+    if (realtimeChannel) {
+        const supabase = getClient();
+        if (supabase) {
+            try {
+                supabase.removeChannel(realtimeChannel);
+            } catch (e) {
+                // ignore
+            }
+        }
+        realtimeChannel = null;
+    }
+    if (pollingIntervalId) {
+        clearInterval(pollingIntervalId);
+        pollingIntervalId = null;
+    }
+}
+
+function setRealtimeStatus(isOnline) {
+    if (!realtimeStatusIndicatorEl) return;
+    if (isOnline) {
+        realtimeStatusIndicatorEl.className = 'realtime-indicator online';
+        realtimeStatusIndicatorEl.innerHTML = '<span class="status-dot"></span> Realtime Aktif';
+    } else {
+        realtimeStatusIndicatorEl.className = 'realtime-indicator offline';
+        realtimeStatusIndicatorEl.innerHTML = '<span class="status-dot"></span> Polling 30s';
+    }
+}
+
+/**
+ * Eksekusi update otomatis tanpa mengganggu form modal keputusan admin jika sedang terbuka
+ */
+async function handleRealtimeUpdate(source) {
+    if (!currentUserProfile || currentUserProfile.role !== 'admin') return;
+
+    // Jangan refresh modal jika sedang terbuka untuk mencegah ketikan admin hilang
+    const isModalOpen = modalDecisionEl && !modalDecisionEl.classList.contains('hidden');
+
+    try {
+        await refreshAdminDashboard();
+        if (!isModalOpen) {
+            await refreshAdminBorrows();
+            await refreshAdminReturns();
+        }
+        await refreshAdminCards();
+        await refreshAdminHistory();
+    } catch (err) {
+        console.warn("Gagal refresh data realtime:", err);
+    }
+}
+
 // ==============================================================================
-// MONITORING KETERSEDIAAN KARTU PUBLIK (UNTUK MEJA)
+// MONITORING KETERSEDIAAN KARTU PUBLIK (UNTUK QR MONITORING)
 // ==============================================================================
 
 async function refreshPublicMonitoring() {
@@ -361,7 +528,7 @@ async function refreshPublicMonitoring() {
 
         // Pasang event tombol cepat pinjam/kembalikan
         publicCardsMonitoringGridEl.querySelectorAll('.btn-quick-select-card').forEach(b => {
-            b.addEventListener('click', () => {
+            b.addEventListener('click', async () => {
                 const cardId = b.dataset.id;
                 const cardLabel = b.dataset.label;
                 const cardStatus = b.dataset.status;
@@ -374,7 +541,7 @@ async function refreshPublicMonitoring() {
 
                 formGuestBorrowEl.classList.add('hidden');
                 formGuestReturnEl.classList.add('hidden');
-                cardStatusInfoBoxEl.classList.add('hidden');
+                if (cardStatusInfoBoxEl) cardStatusInfoBoxEl.classList.add('hidden');
                 if (returnOverdueAlertEl) returnOverdueAlertEl.classList.add('hidden');
 
                 if (cardStatus === 'available') {
@@ -386,13 +553,28 @@ async function refreshPublicMonitoring() {
                     formGuestReturnEl.classList.remove('hidden');
                     returnCardIdEl.value = cardId;
                     inputReturnDateEl.value = new Date().toISOString().split('T')[0];
+
+                    // Ambil saldo awal kartu
+                    try {
+                        const sAwal = await getActiveCardBalance(cardId);
+                        currentActiveCardSaldoAwal = sAwal;
+                        displayReturnSaldoAwalEl.textContent = formatRupiah(sAwal);
+                    } catch (e) {
+                        currentActiveCardSaldoAwal = 300000;
+                        displayReturnSaldoAwalEl.textContent = formatRupiah(300000);
+                    }
+                    inputUsageAmountEl.value = '';
+                    usageAmountFormattedEl.textContent = 'Rp 0';
+                    inputTopupAmountEl.value = '';
+                    topupAmountFormattedEl.textContent = 'Otomatis = Pemakaian';
+                    if (inputReceiptFileEl) inputReceiptFileEl.value = '';
                 }
 
                 cardIdentifiedBoxEl.scrollIntoView({ behavior: 'smooth' });
             });
         });
     } catch (err) {
-        publicCardsMonitoringGridEl.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--danger); padding: 1.5rem;">Gagal memuat status: ${err.message}</div>`;
+        publicCardsMonitoringGridEl.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--danger); padding: 1.5rem;">Gagal memuat status: ${err.message}. Periksa koneksi internet Anda.</div>`;
     }
 }
 
@@ -423,8 +605,8 @@ async function handleIdentifyCard(token) {
 
         formGuestBorrowEl.classList.add('hidden');
         formGuestReturnEl.classList.add('hidden');
-        cardStatusInfoBoxEl.classList.add('hidden');
-        returnOverdueAlertEl.classList.add('hidden');
+        if (cardStatusInfoBoxEl) cardStatusInfoBoxEl.classList.add('hidden');
+        if (returnOverdueAlertEl) returnOverdueAlertEl.classList.add('hidden');
 
         if (card.status === 'available') {
             formGuestBorrowEl.classList.remove('hidden');
@@ -435,19 +617,38 @@ async function handleIdentifyCard(token) {
             formGuestReturnEl.classList.remove('hidden');
             returnCardIdEl.value = card.id;
             inputReturnDateEl.value = new Date().toISOString().split('T')[0];
-            if (returnOverdueAlertEl) returnOverdueAlertEl.classList.add('hidden');
+
+            try {
+                const sAwal = await getActiveCardBalance(card.id);
+                currentActiveCardSaldoAwal = sAwal;
+                displayReturnSaldoAwalEl.textContent = formatRupiah(sAwal);
+            } catch (e) {
+                currentActiveCardSaldoAwal = 300000;
+                displayReturnSaldoAwalEl.textContent = formatRupiah(300000);
+            }
+            inputUsageAmountEl.value = '';
+            usageAmountFormattedEl.textContent = 'Rp 0';
+            inputTopupAmountEl.value = '';
+            topupAmountFormattedEl.textContent = 'Otomatis = Pemakaian';
+            if (inputReceiptFileEl) inputReceiptFileEl.value = '';
         } else if (card.status === 'pending_approval') {
-            cardStatusInfoBoxEl.className = 'alert alert-warning';
-            cardStatusInfoBoxEl.innerHTML = '<strong>⏳ Menunggu Persetujuan:</strong> Permohonan peminjaman untuk kartu ini sedang menunggu konfirmasi Admin.';
-            cardStatusInfoBoxEl.classList.remove('hidden');
+            if (cardStatusInfoBoxEl) {
+                cardStatusInfoBoxEl.className = 'alert alert-warning';
+                cardStatusInfoBoxEl.innerHTML = '<strong>⏳ Menunggu Persetujuan:</strong> Permohonan peminjaman untuk kartu ini sedang menunggu konfirmasi Admin.';
+                cardStatusInfoBoxEl.classList.remove('hidden');
+            }
         } else if (card.status === 'pending_return_review') {
-            cardStatusInfoBoxEl.className = 'alert alert-info';
-            cardStatusInfoBoxEl.innerHTML = '<strong>🔍 Menunggu Verifikasi:</strong> Kartu ini telah diajukan pengembalian dan sedang diverifikasi oleh Admin.';
-            cardStatusInfoBoxEl.classList.remove('hidden');
+            if (cardStatusInfoBoxEl) {
+                cardStatusInfoBoxEl.className = 'alert alert-info';
+                cardStatusInfoBoxEl.innerHTML = '<strong>🔍 Menunggu Verifikasi:</strong> Kartu ini telah diajukan pengembalian dan sedang diverifikasi oleh Admin.';
+                cardStatusInfoBoxEl.classList.remove('hidden');
+            }
         } else if (card.status === 'inactive') {
-            cardStatusInfoBoxEl.className = 'alert alert-danger';
-            cardStatusInfoBoxEl.innerHTML = '<strong>⚠️ Kartu Non-Aktif:</strong> Kartu ini dinonaktifkan oleh Admin (rusak atau hilang).';
-            cardStatusInfoBoxEl.classList.remove('hidden');
+            if (cardStatusInfoBoxEl) {
+                cardStatusInfoBoxEl.className = 'alert alert-danger';
+                cardStatusInfoBoxEl.innerHTML = '<strong>⚠️ Kartu Non-Aktif:</strong> Kartu ini dinonaktifkan oleh Admin (rusak atau hilang).';
+                cardStatusInfoBoxEl.classList.remove('hidden');
+            }
         }
     } catch (err) {
         showAlert("Gagal memeriksa kartu: " + err.message, "danger");
@@ -455,7 +656,7 @@ async function handleIdentifyCard(token) {
 }
 
 // ==============================================================================
-// LOGIKA DASHBOARD, OVERDUE & RIWAYAT ADMIN
+// LOGIKA DASHBOARD, OVERDUE & VERIFIKASI ADMIN
 // ==============================================================================
 
 async function refreshAdminDashboard() {
@@ -466,6 +667,20 @@ async function refreshAdminDashboard() {
     if (statOverdueCardsEl) statOverdueCardsEl.textContent = stats.overdueCount;
     if (statPendingApprovalEl) statPendingApprovalEl.textContent = stats.pendingBorrow;
     if (statPendingReturnsEl) statPendingReturnsEl.textContent = stats.pendingReturn;
+
+    // Update Badges di Menu Verifikasi & Subnav
+    if (badgeSubtabBorrowsEl) badgeSubtabBorrowsEl.textContent = stats.pendingBorrow;
+    if (badgeSubtabReturnsEl) badgeSubtabReturnsEl.textContent = stats.pendingReturn;
+    
+    const totalVerifikasi = (stats.pendingBorrow || 0) + (stats.pendingReturn || 0);
+    if (badgeTotalVerifikasiEl) {
+        badgeTotalVerifikasiEl.textContent = totalVerifikasi;
+        if (totalVerifikasi > 0) {
+            badgeTotalVerifikasiEl.classList.remove('hidden');
+        } else {
+            badgeTotalVerifikasiEl.classList.add('hidden');
+        }
+    }
 
     // Render Banner Peringatan Keterlambatan (> 3 Hari)
     if (stats.overdueCount > 0 && adminOverdueBannerEl && overdueItemsContainerEl) {
@@ -489,7 +704,6 @@ async function refreshAdminDashboard() {
 
 async function refreshAdminBorrows() {
     if (!adminBorrowsTbodyEl) return;
-    adminBorrowsTbodyEl.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Memuat data permohonan...</td></tr>';
 
     try {
         const list = await fetchPendingBorrows();
@@ -500,15 +714,15 @@ async function refreshAdminBorrows() {
 
         adminBorrowsTbodyEl.innerHTML = list.map(tx => `
             <tr>
-                <td>${formatDateTime(tx.requested_at)}</td>
-                <td>
+                <td data-label="Waktu Pengajuan">${formatDateTime(tx.requested_at)}</td>
+                <td data-label="Peminjam & Divisi">
                     <strong style="color: #ffffff;">${tx.borrower_name}</strong><br>
                     <small style="color: var(--cyan);">${tx.borrower_department || 'Divisi'}</small>
                 </td>
-                <td><strong>${tx.cards?.label || '-'}</strong><br><small style="color: var(--text-muted);">${tx.cards?.card_identifier || ''}</small></td>
-                <td>${formatDateOnly(tx.borrow_date)}</td>
-                <td>${tx.purpose}</td>
-                <td>
+                <td data-label="Kartu e-Toll"><strong>${tx.cards?.label || '-'}</strong><br><small style="color: var(--text-muted);">${tx.cards?.card_identifier || ''}</small></td>
+                <td data-label="Tanggal Pinjam">${formatDateOnly(tx.borrow_date)}</td>
+                <td data-label="Keperluan">${tx.purpose}</td>
+                <td data-label="Aksi Keputusan">
                     <div style="display: flex; gap: 0.35rem;">
                         <button class="btn btn-success btn-sm btn-action-approve-borrow" data-id="${tx.id}" data-name="${tx.borrower_name}" data-card="${tx.cards?.label || 'Kartu'}">Setujui</button>
                         <button class="btn btn-danger btn-sm btn-action-reject-borrow" data-id="${tx.id}" data-name="${tx.borrower_name}" data-card="${tx.cards?.label || 'Kartu'}">Tolak</button>
@@ -530,43 +744,53 @@ async function refreshAdminBorrows() {
 
 async function refreshAdminReturns() {
     if (!adminReturnsTbodyEl) return;
-    adminReturnsTbodyEl.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Memuat pengembalian...</td></tr>';
 
     try {
         const list = await fetchPendingReturns();
         if (list.length === 0) {
-            adminReturnsTbodyEl.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); font-style: italic;">Tidak ada pengembalian yang menunggu verifikasi.</td></tr>';
+            adminReturnsTbodyEl.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); font-style: italic;">Tidak ada pengembalian yang menunggu verifikasi.</td></tr>';
             return;
         }
 
         adminReturnsTbodyEl.innerHTML = list.map(ret => {
             const tx = ret.transactions;
             const card = tx?.cards;
+            const sAwal = tx?.saldo_awal !== undefined ? tx.saldo_awal : 300000;
+            const pemakaian = ret.pemakaian !== undefined ? ret.pemakaian : (tx?.pemakaian || 0);
+            const topup = ret.topup_amount !== undefined ? ret.topup_amount : pemakaian;
+
+            const receiptBtn = ret.receipt_storage_path ? 
+                `<button type="button" class="btn btn-secondary btn-sm btn-view-receipt" data-path="${ret.receipt_storage_path}" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;">🧾 Lihat</button>` : 
+                `<span style="color: var(--text-muted); font-size: 0.8rem;">-</span>`;
+
             return `
                 <tr>
-                    <td>${formatDateTime(ret.submitted_at)}</td>
-                    <td>
+                    <td data-label="Waktu Pengajuan">${formatDateTime(ret.submitted_at)}</td>
+                    <td data-label="Peminjam & Divisi">
                         <strong style="color: #ffffff;">${tx?.borrower_name || 'Karyawan'}</strong><br>
                         <small style="color: var(--cyan);">${tx?.borrower_department || 'Divisi'}</small>
                     </td>
-                    <td><strong>${card?.label || '-'}</strong><br><small style="color: var(--text-muted);">${card?.card_identifier || ''}</small></td>
-                    <td>${formatDateOnly(ret.topup_date)}</td>
-                    <td><strong style="color: var(--cyan);">${formatRupiah(ret.topup_amount)}</strong></td>
-                    <td><small style="color: var(--text-secondary);">${ret.return_notes || 'Tidak ada catatan'}</small></td>
-                    <td>
+                    <td data-label="Kartu e-Toll"><strong>${card?.label || '-'}</strong><br><small style="color: var(--text-muted);">${card?.card_identifier || ''}</small></td>
+                    <td data-label="Saldo Awal"><span style="color: var(--cyan); font-weight: 600;">${formatRupiah(sAwal)}</span></td>
+                    <td data-label="Pemakaian"><strong style="color: #f87171;">${formatRupiah(pemakaian)}</strong></td>
+                    <td data-label="Saldo Top Up"><strong style="color: var(--cyan);">${formatRupiah(topup)}</strong></td>
+                    <td data-label="Struk">${receiptBtn}</td>
+                    <td data-label="Catatan Peminjam"><small style="color: var(--text-secondary);">${ret.return_notes || '-'}</small></td>
+                    <td data-label="Aksi Verifikasi">
                         <div style="display: flex; gap: 0.35rem;">
                             <button class="btn btn-success btn-sm btn-action-approve-return" 
                                 data-id="${ret.id}" 
                                 data-name="${tx?.borrower_name || 'Karyawan'}" 
                                 data-card="${card?.label || 'Kartu'}"
-                                data-amount="${ret.topup_amount}">
+                                data-saldo-awal="${sAwal}"
+                                data-pemakaian="${pemakaian}"
+                                data-topup="${topup}">
                                 Setujui
                             </button>
                             <button class="btn btn-danger btn-sm btn-action-reject-return" 
                                 data-id="${ret.id}" 
                                 data-name="${tx?.borrower_name || 'Karyawan'}" 
-                                data-card="${card?.label || 'Kartu'}"
-                                data-amount="${ret.topup_amount}">
+                                data-card="${card?.label || 'Kartu'}">
                                 Tolak
                             </button>
                         </div>
@@ -575,24 +799,54 @@ async function refreshAdminReturns() {
             `;
         }).join('');
 
+        // Event listener lihat struk
+        adminReturnsTbodyEl.querySelectorAll('.btn-view-receipt').forEach(b => {
+            b.addEventListener('click', async () => {
+                const path = b.dataset.path;
+                b.disabled = true;
+                b.textContent = 'Memuat...';
+                try {
+                    const signedUrl = await getReceiptSignedUrl(path);
+                    if (signedUrl) {
+                        window.open(signedUrl, '_blank');
+                    } else {
+                        showAlert("Tidak dapat mengakses foto struk.", "warning");
+                    }
+                } catch (e) {
+                    showAlert("Gagal membuka struk: " + e.message, "danger");
+                } finally {
+                    b.disabled = false;
+                    b.textContent = '🧾 Lihat';
+                }
+            });
+        });
+
+        // Event listener setujui / tolak
         adminReturnsTbodyEl.querySelectorAll('.btn-action-approve-return').forEach(b => {
             b.addEventListener('click', () => {
-                openDecisionModal(b.dataset.id, 'approved', b.dataset.name, b.dataset.card, 'return', `Top Up: ${formatRupiah(b.dataset.amount)}`);
+                openDecisionModal(b.dataset.id, 'approved', b.dataset.name, b.dataset.card, 'return', {
+                    saldoAwal: Number(b.dataset.saldoAwal),
+                    pemakaian: Number(b.dataset.pemakaian),
+                    topup: Number(b.dataset.topup)
+                });
             });
         });
         adminReturnsTbodyEl.querySelectorAll('.btn-action-reject-return').forEach(b => {
             b.addEventListener('click', () => {
-                openDecisionModal(b.dataset.id, 'rejected', b.dataset.name, b.dataset.card, 'return', `Top Up: ${formatRupiah(b.dataset.amount)}`);
+                openDecisionModal(b.dataset.id, 'rejected', b.dataset.name, b.dataset.card, 'return');
             });
         });
     } catch (err) {
-        adminReturnsTbodyEl.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger);">Gagal memuat: ${err.message}</td></tr>`;
+        adminReturnsTbodyEl.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--danger);">Gagal memuat: ${err.message}</td></tr>`;
     }
 }
 
+// ==============================================================================
+// TAB MASTER KARTU
+// ==============================================================================
+
 async function refreshAdminCards() {
     if (!adminCardsTbodyEl) return;
-    adminCardsTbodyEl.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Memuat kartu...</td></tr>';
 
     try {
         const cards = await fetchAllCards();
@@ -603,11 +857,11 @@ async function refreshAdminCards() {
 
         adminCardsTbodyEl.innerHTML = cards.map(c => `
             <tr>
-                <td><strong>${c.label}</strong></td>
-                <td>${c.card_identifier}</td>
-                <td>${renderStatusBadge(c.status)}</td>
-                <td><code style="font-size: 0.8rem; background: rgba(15, 23, 42, 0.8); color: var(--cyan); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">${c.qr_token}</code></td>
-                <td>
+                <td data-label="Label Kartu"><strong>${c.label}</strong></td>
+                <td data-label="Nomor Fisik">${c.card_identifier}</td>
+                <td data-label="Status">${renderStatusBadge(c.status)}</td>
+                <td data-label="Token QR"><code style="font-size: 0.8rem; background: rgba(15, 23, 42, 0.8); color: var(--cyan); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">${c.qr_token}</code></td>
+                <td data-label="Aksi">
                     <div style="display: flex; gap: 0.35rem;">
                         <button class="btn btn-secondary btn-sm btn-view-qr" data-label="${c.label}" data-num="${c.card_identifier}" data-token="${c.qr_token}">📱 QR Kartu</button>
                         ${c.status === 'inactive' ? 
@@ -642,18 +896,17 @@ async function refreshAdminCards() {
 }
 
 // ==============================================================================
-// TAB RIWAYAT TRANSAKSI LENGKAP (PENGGANTI LOG AUDIT)
+// TAB RIWAYAT TRANSAKSI LENGKAP
 // ==============================================================================
 
 async function refreshAdminHistory() {
     if (!adminHistoryTbodyEl) return;
-    adminHistoryTbodyEl.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Memuat riwayat transaksi...</td></tr>';
 
     try {
         allHistoryCache = await fetchAllTransactionHistory();
         renderFilteredHistory();
     } catch (err) {
-        adminHistoryTbodyEl.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger);">Gagal memuat riwayat: ${err.message}</td></tr>`;
+        adminHistoryTbodyEl.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--danger);">Gagal memuat riwayat: ${err.message}</td></tr>`;
     }
 }
 
@@ -665,7 +918,6 @@ function renderFilteredHistory() {
     const today = new Date();
 
     let filtered = allHistoryCache.filter(tx => {
-        // Cek search term
         const matchSearch = 
             (tx.borrower_name || '').toLowerCase().includes(searchTerm) ||
             (tx.borrower_department || '').toLowerCase().includes(searchTerm) ||
@@ -674,7 +926,6 @@ function renderFilteredHistory() {
 
         if (!matchSearch) return false;
 
-        // Cek status filter
         if (statusFilter === 'all') return true;
 
         if (statusFilter === 'overdue') {
@@ -687,8 +938,25 @@ function renderFilteredHistory() {
         return tx.status === statusFilter;
     });
 
+    // Hitung Total Pemakaian & Top Up
+    let totalUsage = 0;
+    let totalTopup = 0;
+    let completedCount = 0;
+
+    allHistoryCache.forEach(tx => {
+        if (tx.status === 'completed') {
+            totalUsage += Number(tx.pemakaian || 0);
+            totalTopup += Number(tx.saldo_topup || 0);
+            completedCount++;
+        }
+    });
+
+    if (historyTotalUsageEl) historyTotalUsageEl.textContent = formatRupiah(totalUsage);
+    if (historyTotalTopupEl) historyTotalTopupEl.textContent = formatRupiah(totalTopup);
+    if (historyTotalCountEl) historyTotalCountEl.textContent = completedCount;
+
     if (filtered.length === 0) {
-        adminHistoryTbodyEl.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); font-style: italic;">Tidak ada data transaksi yang cocok dengan filter.</td></tr>';
+        adminHistoryTbodyEl.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); font-style: italic;">Tidak ada data transaksi yang cocok dengan filter.</td></tr>';
         return;
     }
 
@@ -704,35 +972,38 @@ function renderFilteredHistory() {
             if (diffDays > 3) isOverdue = true;
         }
 
-        let returnDetails = '-';
-        if (ret) {
-            returnDetails = `
-                <div style="font-size: 0.8rem;">
-                    <strong>Kembali:</strong> ${formatDateOnly(ret.topup_date)}<br>
-                    <strong>Top Up:</strong> <span style="color: var(--cyan);">${formatRupiah(ret.topup_amount)}</span>
-                    ${ret.return_notes ? `<br><small style="color: var(--text-muted);">${ret.return_notes}</small>` : ''}
-                </div>
-            `;
-        }
+        const saldoAwal = tx.saldo_awal !== undefined && tx.saldo_awal !== null ? tx.saldo_awal : 300000;
+        const pemakaian = tx.pemakaian !== undefined && tx.pemakaian !== null ? tx.pemakaian : (ret?.pemakaian || 0);
+        const topup = tx.saldo_topup !== undefined && tx.saldo_topup !== null ? tx.saldo_topup : (ret?.topup_amount || 0);
+        const saldoAkhir = tx.saldo_akhir !== undefined && tx.saldo_akhir !== null ? tx.saldo_akhir : (saldoAwal - pemakaian + topup);
+
+        const correctionBadge = (tx.is_corrected || ret?.is_corrected) ? 
+            `<br><span class="status-badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-size: 0.7rem; padding: 1px 5px; margin-top: 2px; display: inline-block;">Dikoreksi Admin</span>` : '';
 
         return `
             <tr>
-                <td>
+                <td data-label="Waktu & Tanggal Pinjam">
                     <strong style="color: #ffffff;">${formatDateOnly(tx.borrow_date)}</strong><br>
                     <small style="color: var(--text-muted);">${formatDateTime(tx.requested_at)}</small>
                 </td>
-                <td>
+                <td data-label="Peminjam & Divisi">
                     <strong style="color: #ffffff;">${tx.borrower_name}</strong><br>
                     <small style="color: var(--cyan);">${tx.borrower_department || 'Divisi'}</small>
                 </td>
-                <td>
+                <td data-label="Kartu e-Toll">
                     <strong>${tx.cards?.label || '-'}</strong><br>
                     <small style="color: var(--text-muted);">${tx.cards?.card_identifier || ''}</small>
                 </td>
-                <td>${tx.purpose}</td>
-                <td>${renderStatusBadge(tx.status, isOverdue, diffDays)}</td>
-                <td>${returnDetails}</td>
-                <td><small style="color: var(--text-secondary);">${tx.decision_note || ret?.review_note || '-'}</small></td>
+                <td data-label="Keperluan">${tx.purpose}</td>
+                <td data-label="Saldo Awal"><span style="color: var(--cyan); font-weight: 600;">${formatRupiah(saldoAwal)}</span></td>
+                <td data-label="Pemakaian"><strong style="color: #f87171;">${formatRupiah(pemakaian)}</strong></td>
+                <td data-label="Saldo Top Up">
+                    <strong style="color: var(--cyan);">${formatRupiah(topup)}</strong>
+                    ${correctionBadge}
+                </td>
+                <td data-label="Saldo Akhir"><strong style="color: #34d399;">${formatRupiah(saldoAkhir)}</strong></td>
+                <td data-label="Status">${renderStatusBadge(tx.status, isOverdue, diffDays)}</td>
+                <td data-label="Catatan Admin"><small style="color: var(--text-secondary);">${tx.decision_note || ret?.review_note || '-'}</small></td>
             </tr>
         `;
     }).join('');
@@ -754,14 +1025,33 @@ function exportHistoryToCSV() {
         "Nomor Fisik Kartu",
         "Keperluan",
         "Status Transaksi",
+        "Saldo Awal (Rp)",
+        "Pemakaian (Rp)",
+        "Saldo Top Up (Rp)",
+        "Saldo Akhir (Rp)",
+        "Status Koreksi",
         "Tanggal Pengembalian",
-        "Nominal Top Up (Rp)",
         "Catatan Pengembalian",
-        "Catatan Keputusan Admin"
+        "Catatan Admin"
     ];
+
+    let totalPemakaian = 0;
+    let totalTopup = 0;
 
     const rows = allHistoryCache.map(tx => {
         const ret = tx.returns?.[0];
+        const saldoAwal = tx.saldo_awal !== undefined && tx.saldo_awal !== null ? tx.saldo_awal : 300000;
+        const pemakaian = tx.pemakaian !== undefined && tx.pemakaian !== null ? tx.pemakaian : (ret?.pemakaian || 0);
+        const topup = tx.saldo_topup !== undefined && tx.saldo_topup !== null ? tx.saldo_topup : (ret?.topup_amount || 0);
+        const saldoAkhir = tx.saldo_akhir !== undefined && tx.saldo_akhir !== null ? tx.saldo_akhir : (saldoAwal - pemakaian + topup);
+
+        if (tx.status === 'completed') {
+            totalPemakaian += Number(pemakaian);
+            totalTopup += Number(topup);
+        }
+
+        const isCorrected = (tx.is_corrected || ret?.is_corrected) ? 'Dikoreksi admin' : 'Sesuai pemakaian';
+
         return [
             `"${tx.id}"`,
             `"${formatDateOnly(tx.borrow_date)}"`,
@@ -772,14 +1062,39 @@ function exportHistoryToCSV() {
             `"${(tx.cards?.card_identifier || '').replace(/"/g, '""')}"`,
             `"${(tx.purpose || '').replace(/"/g, '""')}"`,
             `"${tx.status}"`,
+            `"${formatRupiah(saldoAwal)}"`,
+            `"${formatRupiah(pemakaian)}"`,
+            `"${formatRupiah(topup)}"`,
+            `"${formatRupiah(saldoAkhir)}"`,
+            `"${isCorrected}"`,
             `"${ret ? formatDateOnly(ret.topup_date) : '-'}"`,
-            `"${ret ? (ret.topup_amount || 0) : 0}"`,
             `"${(ret?.return_notes || '').replace(/"/g, '""')}"`,
             `"${(tx.decision_note || ret?.review_note || '').replace(/"/g, '""')}"`
         ];
     });
 
-    const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    // Baris Total Ringkasan
+    const summaryRow = [
+        `"TOTAL RINGKASAN"`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `"Selesai"`,
+        `""`,
+        `"${formatRupiah(totalPemakaian)}"`,
+        `"${formatRupiah(totalTopup)}"`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `""`
+    ];
+
+    const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(e => e.join(',')), summaryRow.join(',')].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -792,7 +1107,7 @@ function exportHistoryToCSV() {
 }
 
 // ==============================================================================
-// MODAL POPUP (QR KARTU, QR MEJA, KEPUTUSAN ADMIN)
+// MODAL POPUP (QR KARTU, QR MONITORING, KEPUTUSAN ADMIN)
 // ==============================================================================
 
 function renderQrCode(element, text, size = 220) {
@@ -822,7 +1137,6 @@ function showQrModal(label, identifier, token) {
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             savedBaseUrl = 'http://192.168.1.8:3000';
         } else {
-            // Otomatis deteksi base URL lengkap (termasuk sub-path seperti GitHub Pages /repo-name/)
             const cleanPath = window.location.pathname.replace(/\/[^\/]*\.html$/, '').replace(/\/$/, '');
             savedBaseUrl = window.location.origin + cleanPath;
         }
@@ -843,7 +1157,6 @@ function showDeskQrModal() {
         if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             savedBaseUrl = 'http://192.168.1.8:3000';
         } else {
-            // Otomatis deteksi base URL lengkap (termasuk sub-path seperti GitHub Pages /repo-name/)
             const cleanPath = window.location.pathname.replace(/\/[^\/]*\.html$/, '').replace(/\/$/, '');
             savedBaseUrl = window.location.origin + cleanPath;
         }
@@ -855,13 +1168,14 @@ function showDeskQrModal() {
     modalDeskQrEl.classList.remove('hidden');
 }
 
-function openDecisionModal(targetId, actionType, borrowerName, cardLabel, category = 'borrow', extraDetail = '') {
+function openDecisionModal(targetId, actionType, borrowerName, cardLabel, category = 'borrow', extraData = null) {
     decisionTxIdEl.value = targetId;
     decisionActionTypeEl.value = actionType;
     decisionTargetCategory = category;
     decisionNoteEl.value = '';
 
     if (category === 'borrow') {
+        if (decisionCorrectionBoxEl) decisionCorrectionBoxEl.classList.add('hidden');
         if (actionType === 'approved') {
             modalDecisionTitleEl.textContent = 'Setujui Permohonan Peminjaman';
             modalDecisionDescEl.textContent = `Anda akan menyetujui peminjaman kartu "${cardLabel}" untuk ${borrowerName}.`;
@@ -876,18 +1190,31 @@ function openDecisionModal(targetId, actionType, borrowerName, cardLabel, catego
             decisionNoteEl.placeholder = 'Contoh: Kartu sedang dipersiapkan untuk dinas pimpinan';
         }
     } else {
+        // Kategori Pengembalian
         if (actionType === 'approved') {
             modalDecisionTitleEl.textContent = 'Setujui Verifikasi Pengembalian';
-            modalDecisionDescEl.textContent = `Anda akan menyetujui pengembalian kartu "${cardLabel}" dari ${borrowerName} (${extraDetail}).`;
-            labelDecisionNoteEl.textContent = 'Catatan Verifikasi (Opsional):';
+            modalDecisionDescEl.textContent = `Verifikasi pengembalian kartu "${cardLabel}" dari ${borrowerName}.`;
+
+            if (extraData && decisionCorrectionBoxEl) {
+                decisionCorrectionBoxEl.classList.remove('hidden');
+                currentDecisionPemakaian = Number(extraData.pemakaian || 0);
+                currentDecisionSaldoAwal = Number(extraData.saldoAwal || 300000);
+
+                if (decisionPemakaianTextEl) decisionPemakaianTextEl.textContent = formatRupiah(currentDecisionPemakaian);
+                if (decisionSaldoAwalTextEl) decisionSaldoAwalTextEl.textContent = formatRupiah(currentDecisionSaldoAwal);
+                if (decisionCorrectedTopupEl) decisionCorrectedTopupEl.value = extraData.topup !== undefined ? extraData.topup : currentDecisionPemakaian;
+            }
+
+            labelDecisionNoteEl.textContent = 'Catatan Admin:';
             decisionNoteEl.required = false;
-            decisionNoteEl.placeholder = 'Contoh: Fisik kartu sudah diterima di GA';
+            decisionNoteEl.placeholder = 'Tambahkan catatan jika diperlukan...';
         } else {
+            if (decisionCorrectionBoxEl) decisionCorrectionBoxEl.classList.add('hidden');
             modalDecisionTitleEl.textContent = 'Tolak Verifikasi Pengembalian';
             modalDecisionDescEl.textContent = `Anda akan menolak pengembalian kartu "${cardLabel}" dari ${borrowerName}. Kartu tetap berstatus dipinjam.`;
             labelDecisionNoteEl.textContent = 'Alasan Penolakan (Wajib Diisi):';
             decisionNoteEl.required = true;
-            decisionNoteEl.placeholder = 'Contoh: Fisik kartu belum diserahkan ke meja GA';
+            decisionNoteEl.placeholder = 'Contoh: Fisik kartu belum diserahkan';
         }
     }
 
@@ -956,10 +1283,11 @@ async function initApp() {
         });
     }
 
-    // 3. Tab Admin Setup
+    // 3. Tab Admin & Sub-tab Setup
     setupAdminTabs();
+    setupVerificationSubtabs();
 
-    // 4. Monitoring Meja Publik (Cetak QR Meja & Refresh)
+    // 4. Monitoring Publik (Cetak QR Monitoring & Refresh)
     if (btnRefreshMonitoringEl) {
         btnRefreshMonitoringEl.addEventListener('click', refreshPublicMonitoring);
     }
@@ -1017,7 +1345,20 @@ async function initApp() {
         handleIdentifyCard(token);
     });
 
-    // 7. Form Peminjaman Cepat (Tanpa Nomor HP, Dilindungi Honeypot)
+    // 7. Muat Master Divisi ke Form Pinjam
+    try {
+        const depts = await fetchDepartments();
+        if (borrowDepartmentEl && depts && depts.length > 0) {
+            const currentSelected = borrowDepartmentEl.value;
+            borrowDepartmentEl.innerHTML = '<option value="">-- Pilih Bagian / Divisi --</option>' + 
+                depts.map(d => `<option value="${d}">${d}</option>`).join('');
+            if (currentSelected) borrowDepartmentEl.value = currentSelected;
+        }
+    } catch (e) {
+        console.warn("Gagal memuat daftar divisi:", e);
+    }
+
+    // 8. Form Peminjaman Cepat (Tanpa Nomor HP, Dilindungi Honeypot)
     formGuestBorrowEl.addEventListener('submit', async (e) => {
         e.preventDefault();
         const cardId = borrowCardIdEl.value;
@@ -1054,20 +1395,64 @@ async function initApp() {
         }
     });
 
-    // 8. Form Pengembalian Cepat (Tanpa Struk)
-    if (inputTopupAmountEl) {
-        inputTopupAmountEl.addEventListener('input', (e) => {
-            const val = e.target.value;
-            topupAmountFormattedEl.textContent = val && Number(val) > 0 ? formatRupiah(val) : '';
+    // 9. Input Pemakaian Saldo & Auto-Top Up di Form Pengembalian
+    if (inputUsageAmountEl) {
+        inputUsageAmountEl.addEventListener('input', (e) => {
+            const rawVal = e.target.value;
+            const valNum = Number(rawVal);
+
+            if (!rawVal || isNaN(valNum) || valNum < 0) {
+                usageAmountFormattedEl.textContent = 'Rp 0';
+                usageAmountFormattedEl.style.color = '#f87171';
+                inputTopupAmountEl.value = '';
+                topupAmountFormattedEl.textContent = 'Otomatis = Pemakaian';
+                return;
+            }
+
+            if (valNum > currentActiveCardSaldoAwal) {
+                usageAmountFormattedEl.innerHTML = `${formatRupiah(valNum)} <span style="font-size: 0.75rem;">(⚠️ Melebihi Saldo Awal!)</span>`;
+                usageAmountFormattedEl.style.color = '#ef4444';
+            } else {
+                usageAmountFormattedEl.textContent = formatRupiah(valNum);
+                usageAmountFormattedEl.style.color = '#f87171';
+            }
+
+            // Saldo Top Up otomatis = Pemakaian
+            inputTopupAmountEl.value = valNum;
+            topupAmountFormattedEl.textContent = `Otomatis = ${formatRupiah(valNum)}`;
         });
     }
 
+    // 10. Form Pengembalian Cepat (Dengan Skema Saldo & Upload Struk Opsional)
     formGuestReturnEl.addEventListener('submit', async (e) => {
         e.preventDefault();
         const cardId = returnCardIdEl.value;
-        const topupAmount = inputTopupAmountEl.value;
+        const usageVal = Number(inputUsageAmountEl.value);
         const returnNotes = inputReturnNotesEl.value;
-        const topupDate = inputReturnDateEl.value;
+        const returnDate = inputReturnDateEl.value;
+        const receiptFile = inputReceiptFileEl?.files?.[0] || null;
+
+        if (isNaN(usageVal) || usageVal < 0) {
+            showAlert("Nominal pemakaian wajib diisi angka minimal 0.", "danger");
+            return;
+        }
+
+        if (usageVal > currentActiveCardSaldoAwal) {
+            showAlert(`Nominal pemakaian (${formatRupiah(usageVal)}) tidak boleh melebihi Saldo Awal kartu (${formatRupiah(currentActiveCardSaldoAwal)}).`, "danger");
+            return;
+        }
+
+        // Validasi struk jika ada
+        if (receiptFile) {
+            if (receiptFile.size > 2 * 1024 * 1024) {
+                showAlert("Ukuran file struk tidak boleh melebihi 2 MB.", "danger");
+                return;
+            }
+            if (!receiptFile.type.startsWith('image/')) {
+                showAlert("File struk harus berupa format gambar (JPG, PNG, WEBP).", "danger");
+                return;
+            }
+        }
 
         btnSubmitReturnEl.disabled = true;
         btnSubmitReturnEl.textContent = 'Memproses Pengembalian...';
@@ -1075,9 +1460,10 @@ async function initApp() {
         try {
             await submitGuestReturn({
                 cardId,
-                topupAmount,
+                usageAmount: usageVal,
                 returnNotes,
-                topupDate
+                returnDate,
+                receiptFile
             });
 
             showAlert("Pengembalian kartu berhasil dikirim! Menunggu verifikasi Admin Utama.", "success", 7000);
@@ -1085,7 +1471,8 @@ async function initApp() {
             formGuestReturnEl.reset();
             cardIdentifiedBoxEl.classList.add('hidden');
             inputManualTokenEl.value = '';
-            topupAmountFormattedEl.textContent = '';
+            usageAmountFormattedEl.textContent = 'Rp 0';
+            topupAmountFormattedEl.textContent = 'Otomatis = Pemakaian';
             await refreshPublicMonitoring();
         } catch (err) {
             showAlert("Gagal mengirim pengembalian: " + err.message, "danger", 8000);
@@ -1095,7 +1482,7 @@ async function initApp() {
         }
     });
 
-    // 9. Admin Tambah Kartu Baru
+    // 11. Admin Tambah Kartu Baru
     if (formCreateCardEl) {
         formCreateCardEl.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -1123,14 +1510,12 @@ async function initApp() {
         });
     }
 
-    // 10. Admin Refresh Buttons
+    // 12. Admin Refresh Buttons
     if (btnRefreshAdminDashboardEl) btnRefreshAdminDashboardEl.addEventListener('click', refreshAdminDashboard);
-    if (btnRefreshAdminBorrowsEl) btnRefreshAdminBorrowsEl.addEventListener('click', refreshAdminBorrows);
-    if (btnRefreshAdminReturnsEl) btnRefreshAdminReturnsEl.addEventListener('click', refreshAdminReturns);
     if (btnRefreshAdminCardsEl) btnRefreshAdminCardsEl.addEventListener('click', refreshAdminCards);
     if (btnRefreshAdminHistoryEl) btnRefreshAdminHistoryEl.addEventListener('click', refreshAdminHistory);
 
-    // 11. Search & Filter Riwayat Transaksi
+    // 13. Search & Filter Riwayat Transaksi
     if (inputHistorySearchEl) {
         inputHistorySearchEl.addEventListener('input', renderFilteredHistory);
     }
@@ -1141,7 +1526,7 @@ async function initApp() {
         btnExportHistoryCsvEl.addEventListener('click', exportHistoryToCSV);
     }
 
-    // 12. Modal QR Code Kartu
+    // 14. Modal QR Code Kartu
     btnCloseQrModalEl.addEventListener('click', () => modalQrEl.classList.add('hidden'));
     btnPrintQrEl.addEventListener('click', () => window.print());
     if (btnUpdateQrUrlEl && qrBaseUrlInputEl) {
@@ -1156,7 +1541,29 @@ async function initApp() {
         });
     }
 
-    // 13. Modal Keputusan Admin Submit (Approve / Reject)
+    // 15. Realtime listener koreksi saldo top up di modal keputusan
+    if (decisionCorrectedTopupEl) {
+        decisionCorrectedTopupEl.addEventListener('input', (e) => {
+            const corrected = Number(e.target.value);
+            if (!isNaN(corrected) && corrected !== currentDecisionPemakaian) {
+                decisionNoteEl.required = true;
+                decisionNoteEl.placeholder = 'Wajib: Jelaskan alasan koreksi saldo top up fisik...';
+                if (decisionCorrectionNoteHintEl) {
+                    decisionCorrectionNoteHintEl.style.color = '#ef4444';
+                    decisionCorrectionNoteHintEl.style.fontWeight = '700';
+                }
+            } else {
+                decisionNoteEl.required = false;
+                decisionNoteEl.placeholder = 'Tambahkan catatan jika diperlukan...';
+                if (decisionCorrectionNoteHintEl) {
+                    decisionCorrectionNoteHintEl.style.color = 'var(--warning)';
+                    decisionCorrectionNoteHintEl.style.fontWeight = 'normal';
+                }
+            }
+        });
+    }
+
+    // 16. Modal Keputusan Admin Submit (Approve / Reject)
     btnCancelDecisionEl.addEventListener('click', () => modalDecisionEl.classList.add('hidden'));
     formDecisionEl.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -1174,7 +1581,22 @@ async function initApp() {
                 showAlert(`Permohonan peminjaman berhasil ${actionType === 'approved' ? 'disetujui' : 'ditolak'}.`, "success");
                 await refreshAdminBorrows();
             } else {
-                await decideReturn(targetId, actionType, note);
+                let correctedVal = null;
+                if (actionType === 'approved' && decisionCorrectedTopupEl) {
+                    const rawCorrected = decisionCorrectedTopupEl.value;
+                    if (rawCorrected !== '') {
+                        correctedVal = Number(rawCorrected);
+                        if (correctedVal !== currentDecisionPemakaian && (!note || !note.trim())) {
+                            showAlert("Catatan Admin WAJIB diisi jika nominal top up dikoreksi berbeda dari pemakaian!", "danger");
+                            btnConfirm.disabled = false;
+                            btnConfirm.textContent = 'Konfirmasi';
+                            decisionNoteEl.focus();
+                            return;
+                        }
+                    }
+                }
+
+                await decideReturn(targetId, actionType, note, correctedVal);
                 showAlert(`Verifikasi pengembalian berhasil ${actionType === 'approved' ? 'disetujui' : 'ditolak'}.`, "success");
                 await refreshAdminReturns();
             }
@@ -1192,11 +1614,11 @@ async function initApp() {
         }
     });
 
-    // 14. Cek Parameter URL (?card=TOKEN) saat scan otomatis
+    // 17. Cek Parameter URL (?card=TOKEN) saat scan otomatis
     const urlParams = new URLSearchParams(window.location.search);
     const cardParam = urlParams.get('card');
 
-    // 15. Inisialisasi Sesi Admin Awal & Monitoring Publik
+    // 18. Inisialisasi Sesi Admin Awal & Monitoring Publik
     await refreshPublicMonitoring();
 
     try {
@@ -1217,7 +1639,7 @@ async function initApp() {
         await updateUIForUser(null);
     }
 
-    // 16. Real-time Auth Subscription
+    // 19. Real-time Auth Subscription
     subscribeAuthChange(async (event, session, profile) => {
         if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
             await updateUIForUser(profile);
@@ -1225,6 +1647,13 @@ async function initApp() {
             await updateUIForUser(null);
         }
     });
+
+    // 20. Public Polling Fallback (setiap 30 detik jika tidak sedang login admin)
+    setInterval(() => {
+        if (!currentUserProfile || currentUserProfile.role !== 'admin') {
+            refreshPublicMonitoring();
+        }
+    }, 30000);
 }
 
 window.addEventListener('DOMContentLoaded', initApp);

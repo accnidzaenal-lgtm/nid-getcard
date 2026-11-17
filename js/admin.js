@@ -4,7 +4,7 @@
 import { getClient } from './supabaseClient.js';
 
 /**
- * Mengambil seluruh riwayat peminjaman dan pengembalian (Lengkap untuk tab Riwayat)
+ * Mengambil seluruh riwayat peminjaman dan pengembalian (Lengkap dengan skema saldo)
  */
 export async function fetchAllTransactionHistory() {
     const supabase = getClient();
@@ -20,6 +20,11 @@ export async function fetchAllTransactionHistory() {
             borrow_date,
             purpose,
             status,
+            saldo_awal,
+            pemakaian,
+            saldo_topup,
+            saldo_akhir,
+            is_corrected,
             requested_at,
             decision_at,
             decision_note,
@@ -32,6 +37,9 @@ export async function fetchAllTransactionHistory() {
                 id,
                 topup_date,
                 topup_amount,
+                pemakaian,
+                is_corrected,
+                receipt_storage_path,
                 return_notes,
                 status,
                 submitted_at,
@@ -182,7 +190,7 @@ export async function decideBorrow(transactionId, decision, note = '') {
 }
 
 /**
- * Mengambil permohonan pengembalian yang menunggu verifikasi admin (Tanpa struk)
+ * Mengambil permohonan pengembalian yang menunggu verifikasi admin (dengan detail saldo)
  */
 export async function fetchPendingReturns() {
     const supabase = getClient();
@@ -195,6 +203,9 @@ export async function fetchPendingReturns() {
             transaction_id,
             topup_date,
             topup_amount,
+            pemakaian,
+            is_corrected,
+            receipt_storage_path,
             return_notes,
             status,
             submitted_at,
@@ -204,6 +215,9 @@ export async function fetchPendingReturns() {
                 borrower_department,
                 borrow_date,
                 purpose,
+                saldo_awal,
+                pemakaian,
+                saldo_topup,
                 cards (
                     id,
                     label,
@@ -223,9 +237,9 @@ export async function fetchPendingReturns() {
 }
 
 /**
- * Admin memverifikasi pengembalian (Setuju / Tolak)
+ * Admin memverifikasi pengembalian (Setuju / Tolak) dengan dukungan koreksi saldo top up
  */
-export async function decideReturn(returnId, decision, note = '') {
+export async function decideReturn(returnId, decision, note = '', correctedTopup = null) {
     const supabase = getClient();
     if (!supabase) throw new Error("Koneksi Supabase tidak aktif.");
 
@@ -236,7 +250,8 @@ export async function decideReturn(returnId, decision, note = '') {
     const { data, error } = await supabase.rpc('admin_decide_return', {
         p_return_id: returnId,
         p_decision: decision,
-        p_note: note.trim() || null
+        p_note: note.trim() || null,
+        p_corrected_topup: correctedTopup !== null && !isNaN(Number(correctedTopup)) ? Number(correctedTopup) : null
     });
 
     if (error) {
@@ -244,6 +259,64 @@ export async function decideReturn(returnId, decision, note = '') {
     }
 
     return data;
+}
+
+/**
+ * Membuat Signed URL privat untuk melihat foto struk pengembalian (Khusus Admin)
+ */
+export async function getReceiptSignedUrl(storagePath) {
+    const supabase = getClient();
+    if (!supabase || !storagePath) return null;
+
+    try {
+        const { data, error } = await supabase.storage
+            .from('receipts')
+            .createSignedUrl(storagePath, 3600); // URL berlaku 1 jam
+
+        if (error) {
+            console.warn("Gagal membuat signed URL struk:", error.message);
+            return null;
+        }
+
+        return data?.signedUrl || null;
+    } catch (e) {
+        console.warn("Kesalahan signed URL:", e);
+        return null;
+    }
+}
+
+/**
+ * Mengambil daftar divisi untuk dropdown peminjaman
+ */
+export async function fetchDepartments() {
+    const supabase = getClient();
+    if (!supabase) return [];
+
+    try {
+        const { data, error } = await supabase
+            .from('departments')
+            .select('name')
+            .eq('is_active', true)
+            .order('name', { ascending: true });
+
+        if (!error && data && data.length > 0) {
+            return data.map(d => d.name);
+        }
+    } catch (e) {
+        console.warn("Gagal memuat divisi:", e);
+    }
+
+    return [
+        'Operasional',
+        'General Affair (GA)',
+        'Keuangan & Akuntansi',
+        'Pemasaran & Penjualan',
+        'Teknologi Informasi (IT)',
+        'Logistik & Pengiriman',
+        'Sumber Daya Manusia (HRD)',
+        'Direksi / Manajemen',
+        'Lainnya'
+    ];
 }
 
 /**
