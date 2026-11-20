@@ -44,8 +44,8 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
     });
 
     // Fallback jika database Supabase belum dimigrasi ke fungsi baru (tanpa p_honeypot)
-    if (res.error && res.error.message && res.error.message.includes('Could not find the function')) {
-        res = await supabase.rpc('submit_guest_borrow', {
+    if (res.error) {
+        const fallbackRes = await supabase.rpc('submit_guest_borrow', {
             p_card_id: cardId,
             p_borrower_name: cleanName,
             p_borrower_department: borrowerDepartment.trim(),
@@ -53,10 +53,11 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
             p_borrower_phone: null,
             p_borrow_date: dateVal
         });
-    }
 
-    if (res.error) {
-        throw new Error(res.error.message);
+        if (!fallbackRes.error) {
+            return fallbackRes.data;
+        }
+        throw new Error(fallbackRes.error.message || res.error.message);
     }
 
     return res.data; // Mengembalikan Transaction ID

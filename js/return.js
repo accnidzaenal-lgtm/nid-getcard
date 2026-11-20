@@ -89,17 +89,18 @@ export async function submitGuestReturn({ cardId, usageAmount, returnNotes, retu
     });
 
     // Fallback jika database Supabase belum dimigrasi ke fungsi baru (menggunakan p_topup_amount)
-    if (res.error && res.error.message && res.error.message.includes('Could not find the function')) {
-        res = await supabase.rpc('submit_guest_return', {
+    if (res.error) {
+        const fallbackRes = await supabase.rpc('submit_guest_return', {
             p_card_id: cardId,
             p_topup_amount: pemakaianVal,
             p_return_notes: returnNotes ? returnNotes.trim() : null,
             p_topup_date: dateVal
         });
-    }
 
-    if (res.error) {
-        throw new Error(res.error.message);
+        if (!fallbackRes.error) {
+            return fallbackRes.data;
+        }
+        throw new Error(fallbackRes.error.message || res.error.message);
     }
 
     return res.data; // Mengembalikan Return ID
