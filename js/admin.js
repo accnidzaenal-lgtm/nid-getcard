@@ -247,18 +247,27 @@ export async function decideReturn(returnId, decision, note = '', correctedTopup
         throw new Error("Alasan penolakan pengembalian wajib diisi.");
     }
 
-    const { data, error } = await supabase.rpc('admin_decide_return', {
+    let res = await supabase.rpc('admin_decide_return', {
         p_return_id: returnId,
         p_decision: decision,
         p_note: note.trim() || null,
         p_corrected_topup: correctedTopup !== null && !isNaN(Number(correctedTopup)) ? Number(correctedTopup) : null
     });
 
-    if (error) {
-        throw new Error(error.message);
+    // Fallback jika database Supabase belum dimigrasi (tanpa p_corrected_topup)
+    if (res.error && res.error.message && res.error.message.includes('Could not find the function')) {
+        res = await supabase.rpc('admin_decide_return', {
+            p_return_id: returnId,
+            p_decision: decision,
+            p_note: note.trim() || null
+        });
     }
 
-    return data;
+    if (res.error) {
+        throw new Error(res.error.message);
+    }
+
+    return res.data;
 }
 
 /**

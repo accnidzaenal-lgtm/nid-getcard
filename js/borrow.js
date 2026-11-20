@@ -24,21 +24,40 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
     if (!borrowerDepartment || borrowerDepartment.trim() === '') throw new Error("Bagian / Divisi wajib diisi.");
     if (!purpose || purpose.trim() === '') throw new Error("Tujuan / Keperluan dinas wajib diisi.");
 
-    const cleanName = normalizeTitleCase(borrowerName);
+    // Proteksi Spam Honeypot di sisi client
+    if (honeypot && honeypot.trim() !== '') {
+        throw new Error("Aktivitas tidak valid terdeteksi (Proteksi Spam).");
+    }
 
-    const { data, error } = await supabase.rpc('submit_guest_borrow', {
+    const cleanName = normalizeTitleCase(borrowerName);
+    const dateVal = borrowDate || new Date().toISOString().split('T')[0];
+
+    // Coba panggil RPC versi baru (dengan p_honeypot)
+    let res = await supabase.rpc('submit_guest_borrow', {
         p_card_id: cardId,
         p_borrower_name: cleanName,
         p_borrower_department: borrowerDepartment.trim(),
         p_purpose: purpose.trim(),
         p_borrower_phone: null, // Tanpa nomor HP & Tanpa NIK
-        p_borrow_date: borrowDate || new Date().toISOString().split('T')[0],
-        p_honeypot: honeypot ? honeypot.trim() : null
+        p_borrow_date: dateVal,
+        p_honeypot: null
     });
 
-    if (error) {
-        throw new Error(error.message);
+    // Fallback jika database Supabase belum dimigrasi ke fungsi baru (tanpa p_honeypot)
+    if (res.error && res.error.message && res.error.message.includes('Could not find the function')) {
+        res = await supabase.rpc('submit_guest_borrow', {
+            p_card_id: cardId,
+            p_borrower_name: cleanName,
+            p_borrower_department: borrowerDepartment.trim(),
+            p_purpose: purpose.trim(),
+            p_borrower_phone: null,
+            p_borrow_date: dateVal
+        });
     }
 
-    return data; // Mengembalikan Transaction ID
+    if (res.error) {
+        throw new Error(res.error.message);
+    }
+
+    return res.data; // Mengembalikan Transaction ID
 }

@@ -77,17 +77,30 @@ export async function submitGuestReturn({ cardId, usageAmount, returnNotes, retu
         }
     }
 
-    const { data, error } = await supabase.rpc('submit_guest_return', {
+    const dateVal = returnDate || new Date().toISOString().split('T')[0];
+
+    // Coba panggil RPC versi baru (dengan p_pemakaian & p_receipt_storage_path)
+    let res = await supabase.rpc('submit_guest_return', {
         p_card_id: cardId,
         p_pemakaian: pemakaianVal,
         p_return_notes: returnNotes ? returnNotes.trim() : null,
-        p_topup_date: returnDate || new Date().toISOString().split('T')[0],
+        p_topup_date: dateVal,
         p_receipt_storage_path: receiptStoragePath
     });
 
-    if (error) {
-        throw new Error(error.message);
+    // Fallback jika database Supabase belum dimigrasi ke fungsi baru (menggunakan p_topup_amount)
+    if (res.error && res.error.message && res.error.message.includes('Could not find the function')) {
+        res = await supabase.rpc('submit_guest_return', {
+            p_card_id: cardId,
+            p_topup_amount: pemakaianVal,
+            p_return_notes: returnNotes ? returnNotes.trim() : null,
+            p_topup_date: dateVal
+        });
     }
 
-    return data; // Mengembalikan Return ID
+    if (res.error) {
+        throw new Error(res.error.message);
+    }
+
+    return res.data; // Mengembalikan Return ID
 }
