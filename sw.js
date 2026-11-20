@@ -1,5 +1,5 @@
 // NID-GATECARD - Service Worker untuk Dukungan PWA & Instalasi HP
-const CACHE_NAME = 'nid-gatecard-v1';
+const CACHE_NAME = 'nid-gatecard-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -54,9 +54,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network First: Selalu ambil file terbaru dari jaringan saat online agar tidak tertahan cache lama
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      return cachedResponse || fetch(event.request).then((networkResponse) => {
+    fetch(event.request)
+      .then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200) {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
@@ -64,9 +65,9 @@ self.addEventListener('fetch', (event) => {
           });
         }
         return networkResponse;
-      });
-    }).catch(() => {
-      return caches.match('./index.html');
-    })
+      })
+      .catch(() => {
+        return caches.match(event.request);
+      })
   );
 });

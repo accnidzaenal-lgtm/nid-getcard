@@ -4,54 +4,14 @@
 import { getClient } from './supabaseClient.js';
 
 /**
- * Mengambil seluruh riwayat peminjaman dan pengembalian (Lengkap dengan skema saldo)
+ * Mengambil seluruh riwayat peminjaman dan pengembalian (Kompatibel dengan semua skema)
  */
 export async function fetchAllTransactionHistory() {
     const supabase = getClient();
     if (!supabase) return [];
 
-    let { data, error } = await supabase
-        .from('transactions')
-        .select(`
-            id,
-            card_id,
-            borrower_name,
-            borrower_department,
-            borrow_date,
-            purpose,
-            status,
-            saldo_awal,
-            pemakaian,
-            saldo_topup,
-            saldo_akhir,
-            is_corrected,
-            requested_at,
-            decision_at,
-            decision_note,
-            cards (
-                id,
-                label,
-                card_identifier
-            ),
-            returns (
-                id,
-                topup_date,
-                topup_amount,
-                pemakaian,
-                is_corrected,
-                receipt_storage_path,
-                return_notes,
-                status,
-                submitted_at,
-                reviewed_at,
-                review_note
-            )
-        `)
-        .order('requested_at', { ascending: false });
-
-    // Fallback jika database belum dimigrasi (kolom saldo_awal belum ada)
-    if (error && (error.message.includes('saldo_awal') || error.message.includes('does not exist') || error.message.includes('column'))) {
-        const fallbackRes = await supabase
+    try {
+        const { data, error } = await supabase
             .from('transactions')
             .select(`
                 id,
@@ -83,32 +43,27 @@ export async function fetchAllTransactionHistory() {
             `)
             .order('requested_at', { ascending: false });
 
-        if (fallbackRes.error) {
-            console.error("Gagal memuat riwayat transaksi:", fallbackRes.error.message);
-            throw fallbackRes.error;
+        if (error) {
+            console.error("Gagal memuat riwayat transaksi:", error.message);
+            throw error;
         }
 
-        data = (fallbackRes.data || []).map(tx => {
+        return (data || []).map(tx => {
             const ret = tx.returns?.[0];
             const topup = ret ? Number(ret.topup_amount || 0) : 0;
             return {
                 ...tx,
-                saldo_awal: 300000,
-                pemakaian: topup,
-                saldo_topup: topup,
-                saldo_akhir: 300000,
-                is_corrected: false
+                saldo_awal: tx.saldo_awal !== undefined ? Number(tx.saldo_awal) : 300000,
+                pemakaian: tx.pemakaian !== undefined ? Number(tx.pemakaian) : topup,
+                saldo_topup: tx.saldo_topup !== undefined ? Number(tx.saldo_topup) : topup,
+                saldo_akhir: tx.saldo_akhir !== undefined ? Number(tx.saldo_akhir) : 300000,
+                is_corrected: tx.is_corrected || false
             };
         });
-        return data;
+    } catch (err) {
+        console.error("Gagal memuat riwayat:", err);
+        throw err;
     }
-
-    if (error) {
-        console.error("Gagal memuat riwayat transaksi:", error.message);
-        throw error;
-    }
-
-    return data || [];
 }
 
 /**
@@ -244,47 +199,14 @@ export async function decideBorrow(transactionId, decision, note = '') {
 }
 
 /**
- * Mengambil permohonan pengembalian yang menunggu verifikasi admin (dengan detail saldo)
+ * Mengambil permohonan pengembalian yang menunggu verifikasi admin
  */
 export async function fetchPendingReturns() {
     const supabase = getClient();
     if (!supabase) return [];
 
-    let { data, error } = await supabase
-        .from('returns')
-        .select(`
-            id,
-            transaction_id,
-            topup_date,
-            topup_amount,
-            pemakaian,
-            is_corrected,
-            receipt_storage_path,
-            return_notes,
-            status,
-            submitted_at,
-            transactions (
-                id,
-                borrower_name,
-                borrower_department,
-                borrow_date,
-                purpose,
-                saldo_awal,
-                pemakaian,
-                saldo_topup,
-                cards (
-                    id,
-                    label,
-                    card_identifier
-                )
-            )
-        `)
-        .eq('status', 'pending_review')
-        .order('submitted_at', { ascending: true });
-
-    // Fallback jika database belum dimigrasi (kolom saldo_awal di transactions belum ada)
-    if (error && (error.message.includes('saldo_awal') || error.message.includes('does not exist') || error.message.includes('column'))) {
-        const fallbackRes = await supabase
+    try {
+        const { data, error } = await supabase
             .from('returns')
             .select(`
                 id,
@@ -311,12 +233,12 @@ export async function fetchPendingReturns() {
             .eq('status', 'pending_review')
             .order('submitted_at', { ascending: true });
 
-        if (fallbackRes.error) {
-            console.error("Gagal memuat pengembalian:", fallbackRes.error.message);
-            throw fallbackRes.error;
+        if (error) {
+            console.error("Gagal memuat pengembalian:", error.message);
+            throw error;
         }
 
-        data = (fallbackRes.data || []).map(ret => {
+        return (data || []).map(ret => {
             const topup = Number(ret.topup_amount || 0);
             return {
                 ...ret,
@@ -329,15 +251,10 @@ export async function fetchPendingReturns() {
                 }
             };
         });
-        return data;
+    } catch (err) {
+        console.error("Gagal memuat pengembalian:", err);
+        throw err;
     }
-
-    if (error) {
-        console.error("Gagal memuat pengembalian:", error.message);
-        throw error;
-    }
-
-    return data || [];
 }
 
 /**
@@ -351,28 +268,17 @@ export async function decideReturn(returnId, decision, note = '', correctedTopup
         throw new Error("Alasan penolakan pengembalian wajib diisi.");
     }
 
-    let res = await supabase.rpc('admin_decide_return', {
+    const { data, error } = await supabase.rpc('admin_decide_return', {
         p_return_id: returnId,
         p_decision: decision,
-        p_note: note.trim() || null,
-        p_corrected_topup: correctedTopup !== null && !isNaN(Number(correctedTopup)) ? Number(correctedTopup) : null
+        p_note: note.trim() || null
     });
 
-    // Fallback jika database Supabase belum dimigrasi (tanpa p_corrected_topup)
-    if (res.error) {
-        const fallbackRes = await supabase.rpc('admin_decide_return', {
-            p_return_id: returnId,
-            p_decision: decision,
-            p_note: note.trim() || null
-        });
-
-        if (!fallbackRes.error) {
-            return fallbackRes.data;
-        }
-        throw new Error(fallbackRes.error.message || res.error.message);
+    if (error) {
+        throw new Error(error.message);
     }
 
-    return res.data;
+    return data;
 }
 
 /**

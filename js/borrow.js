@@ -32,33 +32,18 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
     const cleanName = normalizeTitleCase(borrowerName);
     const dateVal = borrowDate || new Date().toISOString().split('T')[0];
 
-    // Coba panggil RPC versi baru (dengan p_honeypot)
-    let res = await supabase.rpc('submit_guest_borrow', {
+    const { data, error } = await supabase.rpc('submit_guest_borrow', {
         p_card_id: cardId,
         p_borrower_name: cleanName,
         p_borrower_department: borrowerDepartment.trim(),
         p_purpose: purpose.trim(),
         p_borrower_phone: null, // Tanpa nomor HP & Tanpa NIK
-        p_borrow_date: dateVal,
-        p_honeypot: null
+        p_borrow_date: dateVal
     });
 
-    // Fallback jika database Supabase belum dimigrasi ke fungsi baru (tanpa p_honeypot)
-    if (res.error) {
-        const fallbackRes = await supabase.rpc('submit_guest_borrow', {
-            p_card_id: cardId,
-            p_borrower_name: cleanName,
-            p_borrower_department: borrowerDepartment.trim(),
-            p_purpose: purpose.trim(),
-            p_borrower_phone: null,
-            p_borrow_date: dateVal
-        });
-
-        if (!fallbackRes.error) {
-            return fallbackRes.data;
-        }
-        throw new Error(fallbackRes.error.message || res.error.message);
+    if (error) {
+        throw new Error(error.message);
     }
 
-    return res.data; // Mengembalikan Transaction ID
+    return data; // Mengembalikan Transaction ID
 }
