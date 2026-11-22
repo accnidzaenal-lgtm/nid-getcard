@@ -32,7 +32,8 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
     const cleanName = normalizeTitleCase(borrowerName);
     const dateVal = borrowDate || new Date().toISOString().split('T')[0];
 
-    const { data, error } = await supabase.rpc('submit_guest_borrow', {
+    // Coba panggilan RPC standar (6 parameter sesuai schema aktif di Supabase)
+    let { data, error } = await supabase.rpc('submit_guest_borrow', {
         p_card_id: cardId,
         p_borrower_name: cleanName,
         p_borrower_department: borrowerDepartment.trim(),
@@ -40,6 +41,23 @@ export async function submitGuestBorrow({ cardId, borrowerName, borrowerDepartme
         p_borrower_phone: null, // Tanpa nomor HP & Tanpa NIK
         p_borrow_date: dateVal
     });
+
+    // Fallback otomatis jika skema Supabase mengharapkan 7 parameter (dengan p_honeypot)
+    if (error && error.message && (error.message.includes('schema cache') || error.code === 'PGRST202')) {
+        const retry = await supabase.rpc('submit_guest_borrow', {
+            p_card_id: cardId,
+            p_borrower_name: cleanName,
+            p_borrower_department: borrowerDepartment.trim(),
+            p_purpose: purpose.trim(),
+            p_borrower_phone: null,
+            p_borrow_date: dateVal,
+            p_honeypot: null
+        });
+        if (!retry.error) {
+            data = retry.data;
+            error = null;
+        }
+    }
 
     if (error) {
         throw new Error(error.message);

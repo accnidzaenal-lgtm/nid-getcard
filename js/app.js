@@ -588,6 +588,17 @@ async function handleIdentifyCard(token) {
         return;
     }
 
+    // Jika admin sedang login dan kiosk-section tersembunyi, alihkan ke tab kiosk agar form terlihat
+    if (kioskSectionEl && kioskSectionEl.classList.contains('hidden')) {
+        const kioskTab = adminNavEl?.querySelector('[data-tab="tab-kiosk-view"]');
+        if (kioskTab) {
+            kioskTab.click();
+        } else {
+            adminViewEl.classList.add('hidden');
+            kioskSectionEl.classList.remove('hidden');
+        }
+    }
+
     try {
         showAlert("Memeriksa data kartu...", "info", 1500);
         const card = await getCardByToken(token);
@@ -649,6 +660,12 @@ async function handleIdentifyCard(token) {
                 cardStatusInfoBoxEl.innerHTML = '<strong>⚠️ Kartu Non-Aktif:</strong> Kartu ini dinonaktifkan oleh Admin (rusak atau hilang).';
                 cardStatusInfoBoxEl.classList.remove('hidden');
             }
+        }
+
+        if (cardIdentifiedBoxEl) {
+            setTimeout(() => {
+                cardIdentifiedBoxEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
         }
     } catch (err) {
         showAlert("Gagal memeriksa kartu: " + err.message, "danger");
@@ -1361,12 +1378,17 @@ async function initApp() {
     // 8. Form Peminjaman Cepat (Tanpa Nomor HP, Dilindungi Honeypot)
     formGuestBorrowEl.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const cardId = borrowCardIdEl.value;
-        const borrowerName = borrowBorrowerNameEl.value;
-        const borrowerDepartment = borrowDepartmentEl.value;
-        const borrowDate = borrowDateEl.value;
-        const purpose = borrowPurposeEl.value;
+        const cardId = borrowCardIdEl.value || currentIdentifiedCard?.id;
+        const borrowerName = (borrowBorrowerNameEl.value || '').trim();
+        const borrowerDepartment = (borrowDepartmentEl.value || '').trim();
+        const borrowDate = borrowDateEl.value || new Date().toISOString().split('T')[0];
+        const purpose = (borrowPurposeEl.value || '').trim();
         const honeypotVal = document.getElementById('borrow-honeypot')?.value || null;
+
+        if (!cardId) {
+            showAlert("Kartu e-Toll belum teridentifikasi. Silakan scan ulang QR Code atau masukkan kode token kartu.", "danger");
+            return;
+        }
 
         btnSubmitBorrowEl.disabled = true;
         btnSubmitBorrowEl.textContent = 'Mengirim Permohonan...';
@@ -1386,8 +1408,10 @@ async function initApp() {
             formGuestBorrowEl.reset();
             cardIdentifiedBoxEl.classList.add('hidden');
             inputManualTokenEl.value = '';
+            currentIdentifiedCard = null;
             await refreshPublicMonitoring();
         } catch (err) {
+            console.error("Gagal mengajukan peminjaman:", err);
             showAlert("Gagal mengajukan peminjaman: " + err.message, "danger", 8000);
         } finally {
             btnSubmitBorrowEl.disabled = false;
@@ -1631,8 +1655,18 @@ async function initApp() {
         }
 
         if (cardParam) {
-            inputManualTokenEl.value = cardParam;
-            handleIdentifyCard(cardParam);
+            const cleanToken = cardParam.trim().toUpperCase();
+            if (currentUserProfile && currentUserProfile.role === 'admin') {
+                const kioskTab = adminNavEl?.querySelector('[data-tab="tab-kiosk-view"]');
+                if (kioskTab) {
+                    kioskTab.click();
+                } else {
+                    adminViewEl.classList.add('hidden');
+                    kioskSectionEl.classList.remove('hidden');
+                }
+            }
+            inputManualTokenEl.value = cleanToken;
+            await handleIdentifyCard(cleanToken);
         }
     } catch (err) {
         console.error("Gagal memeriksa sesi awal:", err);

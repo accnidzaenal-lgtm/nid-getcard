@@ -1,5 +1,5 @@
 // NID-GATECARD - Service Worker untuk Dukungan PWA & Instalasi HP
-const CACHE_NAME = 'nid-gatecard-v2';
+const CACHE_NAME = 'nid-gatecard-v3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

@@ -66,12 +66,12 @@ export async function fetchPublicCardsMonitoring() {
  */
 export async function getCardByToken(token) {
     const supabase = getClient();
-    if (!supabase) return null;
+    if (!supabase || !token) return null;
 
-    const cleanToken = token.trim();
+    const cleanToken = token.trim().toUpperCase();
 
     try {
-        // 1. Coba melalui RPC get_card_by_token (Aman untuk role anon)
+        // 1. Coba melalui RPC get_card_by_token jika tersedia
         const { data: rpcData, error: rpcErr } = await supabase.rpc('get_card_by_token', {
             p_token: cleanToken
         });
@@ -83,11 +83,11 @@ export async function getCardByToken(token) {
         // Abaikan jika RPC belum terpasang, lanjut ke fallback
     }
 
-    // 2. Fallback direct select (berjalan jika admin sudah login)
+    // 2. Direct select dengan ilike (case-insensitive) agar aman jika input lowercase
     const { data, error } = await supabase
         .from('cards')
         .select('*')
-        .eq('qr_token', cleanToken)
+        .ilike('qr_token', cleanToken)
         .maybeSingle();
 
     if (error) {
